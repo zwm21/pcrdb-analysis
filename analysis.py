@@ -1,57 +1,76 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
-import pandas as pd
-import matplotlib.pyplot as plt
-import numpy as np
+import sys
 import ast
+import pandas as pd
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
+    QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QFileDialog,
+    QMessageBox, QStatusBar
+)
+from PyQt5.QtCore import Qt
 
-# 设置 Matplotlib 中文字体（避免图表中文乱码）
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'WenQuanYi Micro Hei', 'Arial Unicode MS']
-plt.rcParams['axes.unicode_minus'] = False
+class DataAnalyzer(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("玩家数据可视化分析")
+        self.resize(900, 650)
+        self.df = None
 
-class PlayerDataAnalyzer:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("玩家数据可视化工具")
-        self.root.geometry("500x400")
+        # 主界面布局
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
 
-        # 主界面控件
-        self.label = tk.Label(root, text="请选择 player_profile_snapshots_*.csv 文件：", font=("微软雅黑", 12))
-        self.label.pack(pady=20)
+        # 顶部文件选择区域
+        top_layout = QHBoxLayout()
+        self.btn_select = QPushButton("选择 CSV 文件并分析")
+        self.btn_select.clicked.connect(self.select_file)
+        self.label_file = QLabel("未选择文件")
+        self.label_file.setStyleSheet("color: gray;")
+        top_layout.addWidget(self.btn_select)
+        top_layout.addWidget(self.label_file)
+        top_layout.addStretch()
+        main_layout.addLayout(top_layout)
 
-        self.select_btn = tk.Button(root, text="选择文件并分析", command=self.select_file,
-                                    font=("微软雅黑", 11), bg="#4CAF50", fg="white", padx=20, pady=5)
-        self.select_btn.pack(pady=10)
+        # 主体选项卡
+        self.main_tab = QTabWidget()
+        main_layout.addWidget(self.main_tab)
 
-        # 信息展示区域
-        self.info_label = tk.Label(root, text="分析信息：", font=("微软雅黑", 10, "bold"))
-        self.info_label.pack(anchor="w", padx=20, pady=(10, 0))
-        self.text_area = scrolledtext.ScrolledText(root, width=55, height=15, font=("Consolas", 9))
-        self.text_area.pack(padx=20, pady=5)
+        # 为四个分析创建占位页面
+        self.tab_power = QWidget()
+        self.tab_unit = QWidget()
+        self.tab_rank = QWidget()
+        self.tab_talent = QWidget()
+        self.main_tab.addTab(self.tab_power, "战力前100")
+        self.main_tab.addTab(self.tab_unit, "图鉴数分布")
+        self.main_tab.addTab(self.tab_rank, "骑士等级分布")
+        self.main_tab.addTab(self.tab_talent, "深域关卡")
+
+        # 状态栏
+        self.statusBar = QStatusBar()
+        self.setStatusBar(self.statusBar)
 
     def select_file(self):
-        filepath = filedialog.askopenfilename(
-            title="选择 CSV 文件",
-            filetypes=[("CSV 文件", "*.csv"), ("所有文件", "*.*")]
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "选择 player_profile_snapshots_*.csv",
+            filter="CSV 文件 (*.csv);;所有文件 (*.*)"
         )
         if not filepath:
             return
+        self.label_file.setText(filepath)
         try:
-            self.text_area.delete(1.0, tk.END)
-            self.text_area.insert(tk.END, f"正在加载：{filepath}\n")
-            self.root.update()
-
-            df = self.load_data(filepath)
-            self.text_area.insert(tk.END, f"共读取 {len(df)} 条记录\n\n")
-            self.analyze(df)
-
+            self.statusBar.showMessage("正在加载数据...")
+            self.df = self.load_data(filepath)
+            self.statusBar.showMessage(f"加载完成，共 {len(self.df)} 条记录")
+            self.create_all_tables()
         except Exception as e:
-            messagebox.showerror("错误", f"读取或分析文件时出错：\n{str(e)}")
+            QMessageBox.critical(self, "错误", f"数据加载失败：{str(e)}")
+            self.statusBar.showMessage("加载失败")
 
     def load_data(self, filepath):
         df = pd.read_csv(filepath)
         df.columns = df.columns.str.strip()
 
+        # 解析深域数据
         def parse_talent(x):
             if isinstance(x, str):
                 try:
@@ -59,100 +78,125 @@ class PlayerDataAnalyzer:
                 except:
                     return [0,0,0,0,0]
             return [0,0,0,0,0]
-
-        df['talent_list'] = df['talent_quest_clear'].apply(parse_talent)
-        talent_df = pd.DataFrame(df['talent_list'].tolist(), columns=['火', '水', '风', '光', '暗'])
+        talent_list = df['talent_quest_clear'].apply(parse_talent)
+        talent_df = pd.DataFrame(talent_list.tolist(), columns=['火', '水', '风', '光', '暗'])
         df = pd.concat([df, talent_df], axis=1)
         return df
 
-    def analyze(self, df):
-        # 细节1：战力前100玩家
-        self.text_area.insert(tk.END, "生成图表1：战力前100玩家\n")
-        self.plot_top100_power(df)
+    def create_all_tables(self):
+        if self.df is None:
+            return
+        # 战力前100
+        self.build_power_table(self.df)
+        # 图鉴数前10
+        self.build_unit_table(self.df)
+        # 骑士等级前10
+        self.build_rank_table(self.df)
+        # 深域5属性
+        self.build_talent_tables(self.df)
 
-        # 细节2：图鉴数前10数值玩家数量
-        self.text_area.insert(tk.END, "生成图表2：图鉴数前10数值玩家数量\n")
-        self.plot_top10_unit_num(df)
+    def build_power_table(self, df):
+        # 取战力前100，按战力降序
+        top100 = df.nlargest(100, 'total_power')[['total_power', 'user_name']]
+        top100 = top100.sort_values('total_power', ascending=False)
+        self.populate_tab(self.tab_power, top100,
+                          columns=['战力', '玩家昵称'],
+                          col_keys=['total_power', 'user_name'])
 
-        # 细节3：骑士等级前10数值玩家数量
-        self.text_area.insert(tk.END, "生成图表3：骑士等级前10数值玩家数量\n")
-        self.plot_top10_rank(df)
-
-        # 细节4：深域关卡分析
-        self.text_area.insert(tk.END, "生成图表4：深域关卡最难属性通关人数统计\n")
-        hardest_info = self.plot_hardest_talent(df)
-        self.text_area.insert(tk.END, hardest_info)
-        self.text_area.see(tk.END)
-
-        self.text_area.insert(tk.END, "\n所有图表已弹出，可关闭图表窗口后继续使用。\n")
-
-    def plot_top100_power(self, df):
-        top100 = df.nlargest(100, 'total_power')[['viewer_id', 'user_name', 'total_power']]
-        plt.figure(figsize=(12, 6))
-        plt.bar(range(len(top100)), top100['total_power'], color='steelblue')
-        plt.xlabel('玩家排名')
-        plt.ylabel('战力 (total_power)')
-        plt.title('战力最高的前100名玩家')
-        plt.tight_layout()
-        plt.show(block=False)  # 非阻塞显示，允许多个图表同时弹出
-
-    def plot_top10_unit_num(self, df):
+    def build_unit_table(self, df):
+        # 图鉴数分布：取前10个数值（按图鉴数降序）
         unit_counts = df['unit_num'].value_counts().sort_index(ascending=False)
-        top10 = unit_counts.head(10)
-        plt.figure(figsize=(10, 6))
-        bars = plt.bar(top10.index.astype(str), top10.values, color='coral')
-        plt.xlabel('图鉴数 (unit_num)')
-        plt.ylabel('玩家数量')
-        plt.title('图鉴数前10数值的玩家数量分布')
-        for bar, val in zip(bars, top10.values):
-            plt.text(bar.get_x() + bar.get_width()/2, bar.get_height()+0.5, str(val), ha='center')
-        plt.tight_layout()
-        plt.show(block=False)
+        top10 = unit_counts.head(10).reset_index()
+        top10.columns = ['unit_num', 'count']
+        top10 = top10.sort_values('unit_num', ascending=False)
+        self.populate_tab(self.tab_unit, top10,
+                          columns=['图鉴数', '玩家数量'],
+                          col_keys=['unit_num', 'count'])
 
-    def plot_top10_rank(self, df):
+    def build_rank_table(self, df):
+        # 骑士等级分布：取前10个等级（按等级降序）
         rank_counts = df['princess_knight_rank'].value_counts().sort_index(ascending=False)
-        top10 = rank_counts.head(10)
-        plt.figure(figsize=(10, 6))
-        bars = plt.bar(top10.index.astype(str), top10.values, color='mediumseagreen')
-        plt.xlabel('骑士等级 (princess_knight_rank)')
-        plt.ylabel('玩家数量')
-        plt.title('骑士等级前10数值的玩家数量分布')
-        for bar, val in zip(bars, top10.values):
-            plt.text(bar.get_x() + bar.get_width()/2, bar.get_height()+0.5, str(val), ha='center')
-        plt.tight_layout()
-        plt.show(block=False)
+        top10 = rank_counts.head(10).reset_index()
+        top10.columns = ['rank', 'count']
+        top10 = top10.sort_values('rank', ascending=False)
+        self.populate_tab(self.tab_rank, top10,
+                          columns=['骑士等级', '玩家数量'],
+                          col_keys=['rank', 'count'])
 
-    def plot_hardest_talent(self, df):
-        talents = ['火', '水', '风', '光', '暗']
-        avg_levels = df[talents].mean()
-        hardest = avg_levels.idxmin()
-        hardest_avg = avg_levels.min()
-
-        # 生成文字信息
-        info = "\n各属性平均通关层数：\n"
-        for attr in talents:
-            info += f"  {attr}：{avg_levels[attr]:.2f}\n"
-        info += f"最难通关属性：{hardest}（平均 {hardest_avg:.2f}）\n"
-
-        # 统计该属性各关卡人数
-        level_counts = df[hardest].value_counts().sort_index()
-        plt.figure(figsize=(12, 6))
-        plt.bar(level_counts.index.astype(str), level_counts.values, color='orchid')
-        plt.xlabel(f'{hardest}属性关卡编号')
-        plt.ylabel('通关人数')
-        plt.title(f'最难通关属性 [{hardest}] 各关卡通关人数统计 (平均进度 {hardest_avg:.2f})')
-        if len(level_counts) > 30:
-            for i, (x, y) in enumerate(zip(level_counts.index, level_counts.values)):
-                if i % 5 == 0:
-                    plt.text(i, y+0.5, str(y), ha='center', fontsize=8)
+    def build_talent_tables(self, df):
+        # 清除深域选项卡原有内容，重新构建
+        layout = self.tab_talent.layout()
+        if layout is None:
+            layout = QVBoxLayout(self.tab_talent)
         else:
-            for i, (x, y) in enumerate(zip(level_counts.index, level_counts.values)):
-                plt.text(i, y+0.5, str(y), ha='center', fontsize=8)
-        plt.tight_layout()
-        plt.show(block=False)
-        return info
+            while layout.count():
+                child = layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
+
+        # 显示平均进度与最难属性
+        talents = ['火', '水', '风', '光', '暗']
+        avg = {attr: df[attr].mean() for attr in talents}
+        hardest = min(avg, key=avg.get)
+        hardest_avg = avg[hardest]
+
+        info_text = "各属性平均通关层数：\n"
+        for attr in talents:
+            info_text += f"  {attr}：{avg[attr]:.2f}\n"
+        info_text += f"\n最难通关属性：【{hardest}】（平均层数 {hardest_avg:.2f}）"
+        lbl_info = QLabel(info_text)
+        lbl_info.setStyleSheet("font-size: 10pt; margin: 10px;")
+        layout.addWidget(lbl_info)
+
+        # 子选项卡：5个属性
+        sub_tab = QTabWidget()
+        for attr in talents:
+            counts = df[attr].value_counts().sort_index(ascending=False)  # 关卡编号降序
+            counts = counts.reset_index()
+            counts.columns = ['关卡编号', '通关人数']
+            # 确保降序
+            counts = counts.sort_values('关卡编号', ascending=False)
+
+            table = self.create_table(counts,
+                                      columns=['关卡编号', '通关人数'],
+                                      col_keys=['关卡编号', '通关人数'])
+            sub_tab.addTab(table, f"{attr}属性")
+        layout.addWidget(sub_tab)
+
+    def populate_tab(self, tab_widget, df, columns, col_keys):
+        """在给定tab上创建表格布局，替换原有内容"""
+        layout = tab_widget.layout()
+        if layout is None:
+            layout = QVBoxLayout(tab_widget)
+        else:
+            while layout.count():
+                child = layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
+        table = self.create_table(df, columns, col_keys)
+        layout.addWidget(table)
+
+    def create_table(self, df, columns, col_keys):
+        """根据DataFrame创建一个QTableWidget并返回"""
+        rows, cols = df.shape[0], len(columns)
+        table = QTableWidget(rows, cols)
+        table.setHorizontalHeaderLabels(columns)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+
+        for i, row in df.iterrows():
+            for j, key in enumerate(col_keys):
+                value = row[key]
+                item = QTableWidgetItem(str(value))
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(i, j, item)
+
+        return table
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = PlayerDataAnalyzer(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    window = DataAnalyzer()
+    window.show()
+    sys.exit(app.exec_())
