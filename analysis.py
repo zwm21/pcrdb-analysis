@@ -4,23 +4,79 @@ import pandas as pd
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
     QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QFileDialog,
-    QMessageBox, QStatusBar
+    QMessageBox, QStatusBar, QAbstractItemView, QMenu, QAction
 )
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QKeySequence
 
+# ---------- 支持复制功能的表格类 ----------
+class CopyableTable(QTableWidget):
+    def keyPressEvent(self, event):
+        # Ctrl+C 复制选中区域
+        if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_C:
+            self.copy_selection()
+        else:
+            super().keyPressEvent(event)
+
+    def copy_selection(self):
+        """复制选中单元格，用制表符分隔列，换行分隔行"""
+        selected = self.selectedRanges()
+        if not selected:
+            return
+
+        # 获取选中范围的最小/最大行列
+        rows = set()
+        cols = set()
+        for r in selected:
+            for row in range(r.topRow(), r.bottomRow() + 1):
+                for col in range(r.leftColumn(), r.rightColumn() + 1):
+                    rows.add(row)
+                    cols.add(col)
+        rows = sorted(rows)
+        cols = sorted(cols)
+
+        text_lines = []
+        for row in rows:
+            line_items = []
+            for col in cols:
+                item = self.item(row, col)
+                line_items.append(item.text() if item else "")
+            text_lines.append("\t".join(line_items))
+        clipboard_text = "\n".join(text_lines)
+
+        QApplication.clipboard().setText(clipboard_text)
+
+    def copy_all(self):
+        """复制整个表格（包括表头）"""
+        header = []
+        for c in range(self.columnCount()):
+            header_item = self.horizontalHeaderItem(c)
+            header.append(header_item.text() if header_item else "")
+
+        body_lines = []
+        for r in range(self.rowCount()):
+            row_items = []
+            for c in range(self.columnCount()):
+                item = self.item(r, c)
+                row_items.append(item.text() if item else "")
+            body_lines.append("\t".join(row_items))
+
+        full_text = "\t".join(header) + "\n" + "\n".join(body_lines)
+        QApplication.clipboard().setText(full_text)
+
+# ---------- 主窗口 ----------
 class DataAnalyzer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("玩家数据可视化分析")
-        self.resize(900, 650)
+        self.resize(950, 680)
         self.df = None
 
-        # 主界面布局
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
 
-        # 顶部文件选择区域
+        # 顶部文件选择
         top_layout = QHBoxLayout()
         self.btn_select = QPushButton("选择 CSV 文件并分析")
         self.btn_select.clicked.connect(self.select_file)
@@ -31,11 +87,11 @@ class DataAnalyzer(QMainWindow):
         top_layout.addStretch()
         main_layout.addLayout(top_layout)
 
-        # 主体选项卡
+        # 主选项卡
         self.main_tab = QTabWidget()
         main_layout.addWidget(self.main_tab)
 
-        # 为四个分析创建占位页面
+        # 预留四个页面
         self.tab_power = QWidget()
         self.tab_unit = QWidget()
         self.tab_rank = QWidget()
@@ -45,10 +101,10 @@ class DataAnalyzer(QMainWindow):
         self.main_tab.addTab(self.tab_rank, "骑士等级分布")
         self.main_tab.addTab(self.tab_talent, "深域关卡")
 
-        # 状态栏
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
 
+    # ---------- 数据加载 ----------
     def select_file(self):
         filepath, _ = QFileDialog.getOpenFileName(
             self, "选择 player_profile_snapshots_*.csv",
@@ -70,7 +126,6 @@ class DataAnalyzer(QMainWindow):
         df = pd.read_csv(filepath)
         df.columns = df.columns.str.strip()
 
-        # 解析深域数据
         def parse_talent(x):
             if isinstance(x, str):
                 try:
@@ -78,53 +133,118 @@ class DataAnalyzer(QMainWindow):
                 except:
                     return [0,0,0,0,0]
             return [0,0,0,0,0]
+
         talent_list = df['talent_quest_clear'].apply(parse_talent)
         talent_df = pd.DataFrame(talent_list.tolist(), columns=['火', '水', '风', '光', '暗'])
         df = pd.concat([df, talent_df], axis=1)
         return df
 
+    # ---------- 创建所有表格 ----------
     def create_all_tables(self):
         if self.df is None:
             return
-        # 战力前100
         self.build_power_table(self.df)
-        # 图鉴数前10
         self.build_unit_table(self.df)
-        # 骑士等级前10
         self.build_rank_table(self.df)
-        # 深域5属性
         self.build_talent_tables(self.df)
 
-    def build_power_table(self, df):
-        # 取战力前100，按战力降序
-        top100 = df.nlargest(100, 'total_power')[['total_power', 'user_name']]
-        top100 = top100.sort_values('total_power', ascending=False)
-        self.populate_tab(self.tab_power, top100,
-                          columns=['战力', '玩家昵称'],
-                          col_keys=['total_power', 'user_name'])
+    # ---------- 带复制按钮的表格生成器 ----------
+    def create_copyable_table(self, data_df, columns, col_keys):
+        """
+        创建一个包含“复制表格”按钮和可复制表格的 QWidget
+        data_df: pandas DataFrame
+        columns: 表头文字列表
+        col_keys: 对应 data_df 的列名
+        """
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
 
+        # 按钮栏
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        btn_copy = QPushButton("复制表格")
+        btn_layout.addWidget(btn_copy)
+        layout.addLayout(btn_layout)
+
+        # 表格
+        table = CopyableTable(data_df.shape[0], len(columns))
+        table.setHorizontalHeaderLabels(columns)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+
+        for i, row in data_df.iterrows():
+            for j, key in enumerate(col_keys):
+                value = row[key]
+                item = QTableWidgetItem(str(value))
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(i, j, item)
+
+        # 连接复制按钮
+        btn_copy.clicked.connect(table.copy_all)
+
+        layout.addWidget(table)
+        return widget
+
+    def populate_tab(self, tab_widget, data_df, columns, col_keys):
+        """替换指定选项卡内的内容为带复制功能的表格"""
+        layout = tab_widget.layout()
+        if layout is None:
+            layout = QVBoxLayout(tab_widget)
+        else:
+            # 清除旧内容
+            while layout.count():
+                child = layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
+
+        table_widget = self.create_copyable_table(data_df, columns, col_keys)
+        layout.addWidget(table_widget)
+
+    # ---------- 战力前100 ----------
+    def build_power_table(self, df):
+        # 强制转换数值，去除无效
+        top100 = df[['total_power', 'user_name']].copy()
+        top100['total_power'] = pd.to_numeric(top100['total_power'], errors='coerce')
+        top100 = top100.dropna(subset=['total_power'])
+        top100 = top100.sort_values('total_power', ascending=False).head(100)
+        top100 = top100.reset_index(drop=True)
+        # 添加排名列 (1开始)
+        top100.index += 1
+        top100.reset_index(inplace=True)
+        top100.columns = ['排名', 'total_power', 'user_name']
+        top100 = top100.rename(columns={'total_power': '战力', 'user_name': '玩家昵称'})
+
+        self.populate_tab(self.tab_power, top100,
+                          columns=['排名', '战力', '玩家昵称'],
+                          col_keys=['排名', '战力', '玩家昵称'])
+
+    # ---------- 图鉴数分布 ----------
     def build_unit_table(self, df):
-        # 图鉴数分布：取前10个数值（按图鉴数降序）
         unit_counts = df['unit_num'].value_counts().sort_index(ascending=False)
         top10 = unit_counts.head(10).reset_index()
         top10.columns = ['unit_num', 'count']
         top10 = top10.sort_values('unit_num', ascending=False)
+
         self.populate_tab(self.tab_unit, top10,
                           columns=['图鉴数', '玩家数量'],
                           col_keys=['unit_num', 'count'])
 
+    # ---------- 骑士等级分布 ----------
     def build_rank_table(self, df):
-        # 骑士等级分布：取前10个等级（按等级降序）
         rank_counts = df['princess_knight_rank'].value_counts().sort_index(ascending=False)
         top10 = rank_counts.head(10).reset_index()
         top10.columns = ['rank', 'count']
         top10 = top10.sort_values('rank', ascending=False)
+
         self.populate_tab(self.tab_rank, top10,
                           columns=['骑士等级', '玩家数量'],
                           col_keys=['rank', 'count'])
 
+    # ---------- 深域关卡 ----------
     def build_talent_tables(self, df):
-        # 清除深域选项卡原有内容，重新构建
         layout = self.tab_talent.layout()
         if layout is None:
             layout = QVBoxLayout(self.tab_talent)
@@ -134,67 +254,45 @@ class DataAnalyzer(QMainWindow):
                 if child.widget():
                     child.widget().deleteLater()
 
-        # 显示平均进度与最难属性
         talents = ['火', '水', '风', '光', '暗']
         avg = {attr: df[attr].mean() for attr in talents}
         hardest = min(avg, key=avg.get)
         hardest_avg = avg[hardest]
 
+        # 基础信息文本
         info_text = "各属性平均通关层数：\n"
         for attr in talents:
             info_text += f"  {attr}：{avg[attr]:.2f}\n"
-        info_text += f"\n最难通关属性：【{hardest}】（平均层数 {hardest_avg:.2f}）"
+        info_text += f"\n最难通关属性：【{hardest}】（平均层数 {hardest_avg:.2f}）\n"
+
+        # 追加各属性最高关卡及通关人数
+        info_text += "\n各属性最高关卡及通关人数：\n"
+        for attr in talents:
+            max_level = df[attr].max()
+            count_max = (df[attr] == max_level).sum()
+            info_text += f"  {attr}：最高关卡 {max_level}，通关人数 {count_max}\n"
+
         lbl_info = QLabel(info_text)
         lbl_info.setStyleSheet("font-size: 10pt; margin: 10px;")
         layout.addWidget(lbl_info)
 
-        # 子选项卡：5个属性
+        # 子选项卡：5个属性表格
         sub_tab = QTabWidget()
         for attr in talents:
-            counts = df[attr].value_counts().sort_index(ascending=False)  # 关卡编号降序
+            counts = df[attr].value_counts().sort_index(ascending=False)
             counts = counts.reset_index()
             counts.columns = ['关卡编号', '通关人数']
-            # 确保降序
             counts = counts.sort_values('关卡编号', ascending=False)
 
-            table = self.create_table(counts,
-                                      columns=['关卡编号', '通关人数'],
-                                      col_keys=['关卡编号', '通关人数'])
-            sub_tab.addTab(table, f"{attr}属性")
+            table_widget = self.create_copyable_table(
+                counts,
+                columns=['关卡编号', '通关人数'],
+                col_keys=['关卡编号', '通关人数']
+            )
+            sub_tab.addTab(table_widget, f"{attr}属性")
         layout.addWidget(sub_tab)
 
-    def populate_tab(self, tab_widget, df, columns, col_keys):
-        """在给定tab上创建表格布局，替换原有内容"""
-        layout = tab_widget.layout()
-        if layout is None:
-            layout = QVBoxLayout(tab_widget)
-        else:
-            while layout.count():
-                child = layout.takeAt(0)
-                if child.widget():
-                    child.widget().deleteLater()
-        table = self.create_table(df, columns, col_keys)
-        layout.addWidget(table)
-
-    def create_table(self, df, columns, col_keys):
-        """根据DataFrame创建一个QTableWidget并返回"""
-        rows, cols = df.shape[0], len(columns)
-        table = QTableWidget(rows, cols)
-        table.setHorizontalHeaderLabels(columns)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        table.verticalHeader().setVisible(False)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setAlternatingRowColors(True)
-
-        for i, row in df.iterrows():
-            for j, key in enumerate(col_keys):
-                value = row[key]
-                item = QTableWidgetItem(str(value))
-                item.setTextAlignment(Qt.AlignCenter)
-                table.setItem(i, j, item)
-
-        return table
-
+# ---------- 入口 ----------
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = DataAnalyzer()
