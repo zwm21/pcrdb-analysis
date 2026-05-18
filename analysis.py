@@ -224,22 +224,22 @@ class DataAnalyzer(QMainWindow):
     # ---------- 图鉴数分布 ----------
     def build_unit_table(self, df):
         unit_counts = df['unit_num'].value_counts().sort_index(ascending=False)
-        top10 = unit_counts.head(10).reset_index()
-        top10.columns = ['unit_num', 'count']
-        top10 = top10.sort_values('unit_num', ascending=False)
+        unit_df = unit_counts.reset_index()
+        unit_df.columns = ['unit_num', 'count']
+        unit_df = unit_df.sort_values('unit_num', ascending=False)
 
-        self.populate_tab(self.tab_unit, top10,
+        self.populate_tab(self.tab_unit, unit_df,
                           columns=['图鉴数', '玩家数量'],
                           col_keys=['unit_num', 'count'])
 
     # ---------- 骑士等级分布 ----------
     def build_rank_table(self, df):
         rank_counts = df['princess_knight_rank'].value_counts().sort_index(ascending=False)
-        top10 = rank_counts.head(10).reset_index()
-        top10.columns = ['rank', 'count']
-        top10 = top10.sort_values('rank', ascending=False)
+        rank_df = rank_counts.reset_index()
+        rank_df.columns = ['rank', 'count']
+        rank_df = rank_df.sort_values('rank', ascending=False)
 
-        self.populate_tab(self.tab_rank, top10,
+        self.populate_tab(self.tab_rank, rank_df,
                           columns=['骑士等级', '玩家数量'],
                           col_keys=['rank', 'count'])
 
