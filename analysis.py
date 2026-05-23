@@ -4,7 +4,7 @@ import pandas as pd
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
     QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QFileDialog,
-    QMessageBox, QStatusBar, QAbstractItemView, QMenu, QAction
+    QMessageBox, QStatusBar, QAbstractItemView, QMenu, QAction, QDialog
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
@@ -213,7 +213,7 @@ class DataAnalyzer(QMainWindow):
     # ---------- 战力前100 ----------
     def build_power_table(self, df):
         # 强制转换数值，去除无效
-        top100 = df[['total_power', 'user_name']].copy()
+        top100 = df[['total_power', 'user_name', 'viewer_id']].copy()
         top100['total_power'] = pd.to_numeric(top100['total_power'], errors='coerce')
         top100 = top100.dropna(subset=['total_power'])
         top100 = top100.sort_values('total_power', ascending=False).head(100)
@@ -221,12 +221,12 @@ class DataAnalyzer(QMainWindow):
         # 添加排名列 (1开始)
         top100.index += 1
         top100.reset_index(inplace=True)
-        top100.columns = ['排名', 'total_power', 'user_name']
-        top100 = top100.rename(columns={'total_power': '战力', 'user_name': '玩家昵称'})
+        top100.columns = ['排名', 'total_power', 'user_name', 'viewer_id']
+        top100 = top100.rename(columns={'total_power': '战力', 'user_name': '玩家昵称', 'viewer_id': '玩家id'})
 
         self.populate_tab(self.tab_power, top100,
-                          columns=['排名', '战力', '玩家昵称'],
-                          col_keys=['排名', '战力', '玩家昵称'])
+                          columns=['排名', '战力', '玩家昵称', '玩家id'],
+                          col_keys=['排名', '战力', '玩家昵称', '玩家id'])
 
     # ---------- 图鉴数分布 ----------
     def build_unit_table(self, df):
@@ -249,6 +249,55 @@ class DataAnalyzer(QMainWindow):
         self.populate_tab(self.tab_rank, rank_df,
                           columns=['骑士等级', '玩家数量'],
                           col_keys=['rank', 'count'])
+
+        # 在表格上方插入提示文字
+        hint = QLabel("双击骑士等级可查看对应玩家列表")
+        hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
+        self.tab_rank.layout().insertWidget(0, hint)
+
+        # 获取表格并连接双击事件
+        table_widget = self.tab_rank.findChild(QWidget)
+        if table_widget:
+            tbl = table_widget.findChild(CopyableTable)
+            if tbl:
+                tbl.cellDoubleClicked.connect(self.show_rank_players)
+
+    def show_rank_players(self, row, _col):
+        """双击骑士等级行时，弹窗显示该等级下所有玩家"""
+        tbl = self.sender()
+        if not isinstance(tbl, QTableWidget):
+            return
+        rank_item = tbl.item(row, 0)
+        if not rank_item:
+            return
+        rank = int(rank_item.text())
+        filtered = self.df[self.df['princess_knight_rank'] == rank][['viewer_id', 'user_name', 'join_clan_name']]
+        filtered = filtered.reset_index(drop=True)
+
+        # 弹窗
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"骑士等级 {rank} — 玩家列表（共 {len(filtered)} 人）")
+        dlg.resize(700, 500)
+        layout = QVBoxLayout(dlg)
+
+        tbl2 = CopyableTable(len(filtered), 3)
+        tbl2.setHorizontalHeaderLabels(['玩家id', '玩家昵称', '公会名称'])
+        tbl2.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        tbl2.verticalHeader().setVisible(False)
+        tbl2.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl2.setAlternatingRowColors(True)
+
+        tbl2.cellDoubleClicked.connect(lambda r, c: None)  # 不响应双击
+
+        for i, (_, player) in enumerate(filtered.iterrows()):
+            for j, key in enumerate(['viewer_id', 'user_name', 'join_clan_name']):
+                value = player[key]
+                item = QTableWidgetItem(str(value) if pd.notna(value) else '')
+                item.setTextAlignment(Qt.AlignCenter)
+                tbl2.setItem(i, j, item)
+
+        layout.addWidget(tbl2)
+        dlg.exec_()
 
     # ---------- 深域关卡 ----------
     def build_talent_tables(self, df):
