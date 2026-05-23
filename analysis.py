@@ -4,7 +4,8 @@ import pandas as pd
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
     QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QFileDialog,
-    QMessageBox, QStatusBar, QAbstractItemView, QMenu, QAction, QDialog
+    QMessageBox, QStatusBar, QAbstractItemView, QMenu, QAction, QDialog,
+    QComboBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
@@ -274,6 +275,79 @@ class DataAnalyzer(QMainWindow):
             if tbl:
                 tbl.cellDoubleClicked.connect(self.show_rank_players)
 
+    def _choose_sort_and_show(self, filtered, title_template):
+        """弹出排序选择窗口，排序后显示玩家列表"""
+        dlg_sort = QDialog(self)
+        dlg_sort.setWindowTitle("选择排序方式")
+        dlg_sort.resize(400, 150)
+        layout = QVBoxLayout(dlg_sort)
+
+        layout.addWidget(QLabel("请选择排序方式："))
+
+        combo = QComboBox()
+        combo.addItems([
+            "公会id 升序，viewer_id 升序",
+            "公会id 升序，viewer_id 降序",
+            "公会id 降序，viewer_id 升序",
+            "公会id 降序，viewer_id 降序",
+            "viewer_id 升序",
+            "viewer_id 降序",
+        ])
+        layout.addWidget(combo)
+
+        btn_layout = QHBoxLayout()
+        btn_ok = QPushButton("确定")
+        btn_cancel = QPushButton("取消")
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_ok)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+
+        btn_ok.clicked.connect(dlg_sort.accept)
+        btn_cancel.clicked.connect(dlg_sort.reject)
+
+        if dlg_sort.exec_() != QDialog.Accepted:
+            return
+
+        # 排序
+        method = combo.currentIndex()
+        if method == 0:
+            filtered = filtered.sort_values(['join_clan_id', 'viewer_id'], ascending=[True, True])
+        elif method == 1:
+            filtered = filtered.sort_values(['join_clan_id', 'viewer_id'], ascending=[True, False])
+        elif method == 2:
+            filtered = filtered.sort_values(['join_clan_id', 'viewer_id'], ascending=[False, True])
+        elif method == 3:
+            filtered = filtered.sort_values(['join_clan_id', 'viewer_id'], ascending=[False, False])
+        elif method == 4:
+            filtered = filtered.sort_values('viewer_id', ascending=True)
+        elif method == 5:
+            filtered = filtered.sort_values('viewer_id', ascending=False)
+        filtered = filtered.reset_index(drop=True)
+
+        # 显示玩家列表
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title_template.format(len(filtered)))
+        dlg.resize(750, 500)
+        layout2 = QVBoxLayout(dlg)
+
+        tbl2 = CopyableTable(len(filtered), 4)
+        tbl2.setHorizontalHeaderLabels(['玩家id', '玩家昵称', '公会名称', '公会id'])
+        tbl2.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        tbl2.verticalHeader().setVisible(False)
+        tbl2.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl2.setAlternatingRowColors(True)
+
+        for i, (_, player) in enumerate(filtered.iterrows()):
+            for j, key in enumerate(['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id']):
+                value = player[key]
+                item = QTableWidgetItem(str(value) if pd.notna(value) else '')
+                item.setTextAlignment(Qt.AlignCenter)
+                tbl2.setItem(i, j, item)
+
+        layout2.addWidget(tbl2)
+        dlg.exec_()
+
     def show_rank_players(self, row, _col):
         """双击骑士等级行时，弹窗显示该等级下所有玩家"""
         tbl = self.sender()
@@ -283,34 +357,8 @@ class DataAnalyzer(QMainWindow):
         if not rank_item:
             return
         rank = int(rank_item.text())
-        filtered = self.df[self.df['princess_knight_rank'] == rank][['viewer_id', 'user_name', 'join_clan_name']]
-        filtered = filtered.sort_values('viewer_id', ascending=True)
-        filtered = filtered.reset_index(drop=True)
-
-        # 弹窗
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"骑士等级 {rank} — 玩家列表（共 {len(filtered)} 人）")
-        dlg.resize(700, 500)
-        layout = QVBoxLayout(dlg)
-
-        tbl2 = CopyableTable(len(filtered), 3)
-        tbl2.setHorizontalHeaderLabels(['玩家id', '玩家昵称', '公会名称'])
-        tbl2.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        tbl2.verticalHeader().setVisible(False)
-        tbl2.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        tbl2.setAlternatingRowColors(True)
-
-        tbl2.cellDoubleClicked.connect(lambda r, c: None)  # 不响应双击
-
-        for i, (_, player) in enumerate(filtered.iterrows()):
-            for j, key in enumerate(['viewer_id', 'user_name', 'join_clan_name']):
-                value = player[key]
-                item = QTableWidgetItem(str(value) if pd.notna(value) else '')
-                item.setTextAlignment(Qt.AlignCenter)
-                tbl2.setItem(i, j, item)
-
-        layout.addWidget(tbl2)
-        dlg.exec_()
+        filtered = self.df[self.df['princess_knight_rank'] == rank][['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id']]
+        self._choose_sort_and_show(filtered, f"骑士等级 {rank} — 玩家列表（共 {{}} 人）")
 
     def show_unit_players(self, row, _col):
         """双击图鉴数行时，弹窗显示该图鉴数下所有玩家"""
@@ -321,32 +369,8 @@ class DataAnalyzer(QMainWindow):
         if not unit_item:
             return
         unit_num = int(unit_item.text())
-        filtered = self.df[self.df['unit_num'] == unit_num][['viewer_id', 'user_name', 'join_clan_name']]
-        filtered = filtered.sort_values('viewer_id', ascending=True)
-        filtered = filtered.reset_index(drop=True)
-
-        # 弹窗
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"图鉴数 {unit_num} — 玩家列表（共 {len(filtered)} 人）")
-        dlg.resize(700, 500)
-        layout = QVBoxLayout(dlg)
-
-        tbl2 = CopyableTable(len(filtered), 3)
-        tbl2.setHorizontalHeaderLabels(['玩家id', '玩家昵称', '公会名称'])
-        tbl2.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        tbl2.verticalHeader().setVisible(False)
-        tbl2.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        tbl2.setAlternatingRowColors(True)
-
-        for i, (_, player) in enumerate(filtered.iterrows()):
-            for j, key in enumerate(['viewer_id', 'user_name', 'join_clan_name']):
-                value = player[key]
-                item = QTableWidgetItem(str(value) if pd.notna(value) else '')
-                item.setTextAlignment(Qt.AlignCenter)
-                tbl2.setItem(i, j, item)
-
-        layout.addWidget(tbl2)
-        dlg.exec_()
+        filtered = self.df[self.df['unit_num'] == unit_num][['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id']]
+        self._choose_sort_and_show(filtered, f"图鉴数 {unit_num} — 玩家列表（共 {{}} 人）")
 
     # ---------- 深域关卡 ----------
     def build_talent_tables(self, df):
