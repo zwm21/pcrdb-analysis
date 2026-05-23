@@ -66,7 +66,7 @@ class CopyableTable(QTableWidget):
 
 # ---------- 主窗口 ----------
 class DataAnalyzer(QMainWindow):
-    def __init__(self):
+    def __init__(self, auto_file=None):
         super().__init__()
         self.setWindowTitle("玩家数据可视化分析")
         self.resize(950, 680)
@@ -104,14 +104,12 @@ class DataAnalyzer(QMainWindow):
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
 
+        if auto_file:
+            self.load_csv_file(auto_file)
+
     # ---------- 数据加载 ----------
-    def select_file(self):
-        filepath, _ = QFileDialog.getOpenFileName(
-            self, "选择 player_profile_snapshots_*.csv",
-            filter="CSV 文件 (*.csv);;所有文件 (*.*)"
-        )
-        if not filepath:
-            return
+    def load_csv_file(self, filepath):
+        """加载指定的 CSV 文件并刷新所有表格"""
         self.label_file.setText(filepath)
         try:
             self.statusBar.showMessage("正在加载数据...")
@@ -121,6 +119,15 @@ class DataAnalyzer(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"数据加载失败：{str(e)}")
             self.statusBar.showMessage("加载失败")
+
+    def select_file(self):
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "选择 player_profile_snapshots_*.csv",
+            filter="CSV 文件 (*.csv);;所有文件 (*.*)"
+        )
+        if not filepath:
+            return
+        self.load_csv_file(filepath)
 
     def load_data(self, filepath):
         df = pd.read_csv(filepath)
@@ -294,7 +301,8 @@ class DataAnalyzer(QMainWindow):
 
 # ---------- 入口 ----------
 if __name__ == "__main__":
+    auto_file = sys.argv[1] if len(sys.argv) > 1 else None
     app = QApplication(sys.argv)
-    window = DataAnalyzer()
+    window = DataAnalyzer(auto_file=auto_file)
     window.show()
     sys.exit(app.exec_())
