@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
     QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QFileDialog,
     QMessageBox, QStatusBar, QAbstractItemView, QMenu, QAction, QDialog,
-    QComboBox
+    QComboBox, QLineEdit, QSpinBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
@@ -86,21 +86,34 @@ class DataAnalyzer(QMainWindow):
         top_layout.addWidget(self.btn_select)
         top_layout.addWidget(self.label_file)
         top_layout.addStretch()
+
+        # 全局搜索
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("昵称 / viewer_id")
+        self.search_input.setFixedWidth(180)
+        self.search_input.returnPressed.connect(self.search_player)
+        self.btn_search = QPushButton("搜索玩家")
+        self.btn_search.clicked.connect(self.search_player)
+        top_layout.addWidget(self.search_input)
+        top_layout.addWidget(self.btn_search)
         main_layout.addLayout(top_layout)
 
         # 主选项卡
         self.main_tab = QTabWidget()
         main_layout.addWidget(self.main_tab)
 
-        # 预留四个页面
+        # 预留页面
         self.tab_power = QWidget()
         self.tab_unit = QWidget()
         self.tab_rank = QWidget()
         self.tab_talent = QWidget()
+        self.tab_clan = QWidget()
         self.main_tab.addTab(self.tab_power, "战力前100")
         self.main_tab.addTab(self.tab_unit, "图鉴数分布")
         self.main_tab.addTab(self.tab_rank, "骑士等级分布")
         self.main_tab.addTab(self.tab_talent, "深域关卡")
+        self.main_tab.addTab(self.tab_clan, "公会排行")
+        self.clan_min_members = 1
 
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
@@ -155,6 +168,7 @@ class DataAnalyzer(QMainWindow):
         self.build_unit_table(self.df)
         self.build_rank_table(self.df)
         self.build_talent_tables(self.df)
+        self.build_clan_table(self.df)
 
     # ---------- 带复制按钮的表格生成器 ----------
     def create_copyable_table(self, data_df, columns, col_keys):
@@ -194,6 +208,9 @@ class DataAnalyzer(QMainWindow):
         btn_copy.clicked.connect(table.copy_all)
 
         layout.addWidget(table)
+        # 保留表格引用，供调用方直接连接信号
+        # （不要用 findChild 查找：旧控件 deleteLater 后仍可能被同步找到）
+        widget.table = table
         return widget
 
     def copy_cell(self, table, row, col):
@@ -218,6 +235,7 @@ class DataAnalyzer(QMainWindow):
 
         table_widget = self.create_copyable_table(data_df, columns, col_keys)
         layout.addWidget(table_widget)
+        return table_widget.table
 
     # ---------- 战力前100 ----------
     def build_power_table(self, df):
@@ -233,21 +251,15 @@ class DataAnalyzer(QMainWindow):
         top100.columns = ['排名', 'total_power', 'user_name', 'viewer_id']
         top100 = top100.rename(columns={'total_power': '战力', 'user_name': '玩家昵称', 'viewer_id': '玩家id'})
 
-        self.populate_tab(self.tab_power, top100,
-                          columns=['排名', '战力', '玩家昵称', '玩家id'],
-                          col_keys=['排名', '战力', '玩家昵称', '玩家id'])
+        tbl = self.populate_tab(self.tab_power, top100,
+                                columns=['排名', '战力', '玩家昵称', '玩家id'],
+                                col_keys=['排名', '战力', '玩家昵称', '玩家id'])
+        tbl.cellDoubleClicked.connect(lambda r, c, t=tbl: self.copy_cell(t, r, c))
 
         # 在表格上方插入提示文字
         hint = QLabel("双击单元格可复制内容")
         hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
         self.tab_power.layout().insertWidget(0, hint)
-
-        # 获取表格并连接双击复制事件
-        table_widget = self.tab_power.findChild(QWidget)
-        if table_widget:
-            tbl = table_widget.findChild(CopyableTable)
-            if tbl:
-                tbl.cellDoubleClicked.connect(lambda r, c, t=tbl: self.copy_cell(t, r, c))
 
     # ---------- 图鉴数分布 ----------
     def build_unit_table(self, df):
@@ -256,21 +268,15 @@ class DataAnalyzer(QMainWindow):
         unit_df.columns = ['unit_num', 'count']
         unit_df = unit_df.sort_values('unit_num', ascending=False)
 
-        self.populate_tab(self.tab_unit, unit_df,
-                          columns=['图鉴数', '玩家数量'],
-                          col_keys=['unit_num', 'count'])
+        tbl = self.populate_tab(self.tab_unit, unit_df,
+                                columns=['图鉴数', '玩家数量'],
+                                col_keys=['unit_num', 'count'])
+        tbl.cellDoubleClicked.connect(self.show_unit_players)
 
         # 在表格上方插入提示文字
         hint = QLabel("双击图鉴数可查看对应玩家列表")
         hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
         self.tab_unit.layout().insertWidget(0, hint)
-
-        # 获取表格并连接双击事件
-        table_widget = self.tab_unit.findChild(QWidget)
-        if table_widget:
-            tbl = table_widget.findChild(CopyableTable)
-            if tbl:
-                tbl.cellDoubleClicked.connect(self.show_unit_players)
 
     # ---------- 骑士等级分布 ----------
     def build_rank_table(self, df):
@@ -279,21 +285,15 @@ class DataAnalyzer(QMainWindow):
         rank_df.columns = ['rank', 'count']
         rank_df = rank_df.sort_values('rank', ascending=False)
 
-        self.populate_tab(self.tab_rank, rank_df,
-                          columns=['骑士等级', '玩家数量'],
-                          col_keys=['rank', 'count'])
+        tbl = self.populate_tab(self.tab_rank, rank_df,
+                                columns=['骑士等级', '玩家数量'],
+                                col_keys=['rank', 'count'])
+        tbl.cellDoubleClicked.connect(self.show_rank_players)
 
         # 在表格上方插入提示文字
         hint = QLabel("双击骑士等级可查看对应玩家列表")
         hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
         self.tab_rank.layout().insertWidget(0, hint)
-
-        # 获取表格并连接双击事件
-        table_widget = self.tab_rank.findChild(QWidget)
-        if table_widget:
-            tbl = table_widget.findChild(CopyableTable)
-            if tbl:
-                tbl.cellDoubleClicked.connect(self.show_rank_players)
 
     def _choose_sort_and_show(self, filtered, title_template):
         """弹出排序选择窗口，排序后显示玩家列表"""
@@ -443,11 +443,10 @@ class DataAnalyzer(QMainWindow):
                 columns=['关卡编号', '通关人数'],
                 col_keys=['关卡编号', '通关人数']
             )
-            tbl = table_widget.findChild(CopyableTable)
-            if tbl:
-                tbl.cellDoubleClicked.connect(
-                    lambda r, c, t=tbl, a=attr: self.show_talent_players(t, a, r)
-                )
+            tbl = table_widget.table
+            tbl.cellDoubleClicked.connect(
+                lambda r, c, t=tbl, a=attr: self.show_talent_players(t, a, r)
+            )
             sub_tab.addTab(table_widget, f"{attr}属性")
         layout.addWidget(sub_tab)
 
@@ -459,6 +458,171 @@ class DataAnalyzer(QMainWindow):
         level = int(level_item.text())
         filtered = self.df[self.df[attr] == level][['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id']]
         self._choose_sort_and_show(filtered, f"{attr}属性 关卡 {level} — 玩家列表（共 {{}} 人）")
+
+    # ---------- 公会排行 ----------
+    def build_clan_table(self, df=None):
+        if df is None:
+            df = self.df
+        if df is None:
+            return
+
+        layout = self.tab_clan.layout()
+        if layout is None:
+            layout = QVBoxLayout(self.tab_clan)
+        else:
+            while layout.count():
+                child = layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
+
+        # 筛选栏（放入 QWidget 便于整体清理）
+        bar_widget = QWidget()
+        bar = QHBoxLayout(bar_widget)
+        bar.setContentsMargins(4, 4, 4, 0)
+        bar.addWidget(QLabel("仅显示人数 ≥"))
+        spin = QSpinBox()
+        spin.setRange(1, 30)
+        spin.setValue(self.clan_min_members)
+        bar.addWidget(spin)
+        bar.addWidget(QLabel("的公会"))
+        btn_apply = QPushButton("应用筛选")
+        bar.addWidget(btn_apply)
+        bar.addStretch()
+        layout.addWidget(bar_widget)
+
+        hint = QLabel("按公会总战力排行；双击单元格可复制内容")
+        hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
+        layout.addWidget(hint)
+
+        # 按公会聚合
+        data = df.dropna(subset=['join_clan_id']).copy()
+        data['total_power'] = pd.to_numeric(data['total_power'], errors='coerce')
+        data['深域平均'] = data[['火', '水', '风', '光', '暗']].mean(axis=1)
+        clan = data.groupby('join_clan_id').agg(
+            公会名称=('join_clan_name', 'first'),
+            人数=('viewer_id', 'count'),
+            公会总战力=('total_power', 'sum'),
+            平均骑士等级=('princess_knight_rank', 'mean'),
+            深域平均层数=('深域平均', 'mean'),
+        ).reset_index()
+        clan = clan[clan['人数'] >= self.clan_min_members]
+        clan['公会总战力'] = clan['公会总战力'].round(0).astype('Int64')
+        clan['平均骑士等级'] = clan['平均骑士等级'].round(2)
+        clan['深域平均层数'] = clan['深域平均层数'].round(2)
+        clan['join_clan_id'] = clan['join_clan_id'].astype('Int64')
+        clan = clan.sort_values('公会总战力', ascending=False).reset_index(drop=True)
+        clan.index += 1
+        clan.reset_index(inplace=True)
+        clan = clan.rename(columns={'index': '排名', 'join_clan_id': '公会id'})
+
+        table_widget = self.create_copyable_table(
+            clan,
+            columns=['排名', '公会id', '公会名称', '人数', '公会总战力', '平均骑士等级', '深域平均层数'],
+            col_keys=['排名', '公会id', '公会名称', '人数', '公会总战力', '平均骑士等级', '深域平均层数']
+        )
+        tbl = table_widget.table
+        tbl.cellDoubleClicked.connect(lambda r, c, t=tbl: self.copy_cell(t, r, c))
+        layout.addWidget(table_widget)
+
+        def apply_filter():
+            self.clan_min_members = spin.value()
+            self.build_clan_table()
+        btn_apply.clicked.connect(apply_filter)
+
+    # ---------- 全局搜索 ----------
+    def search_player(self):
+        if self.df is None:
+            QMessageBox.information(self, "提示", "请先加载 CSV 文件")
+            return
+        query = self.search_input.text().strip()
+        if not query:
+            return
+        df = self.df
+        mask = (df['user_name'].astype(str).str.contains(query, case=False, na=False, regex=False)
+                | df['viewer_id'].astype(str).str.contains(query, na=False, regex=False))
+        results = df[mask]
+        if len(results) == 0:
+            QMessageBox.information(self, "搜索结果", f"未找到匹配“{query}”的玩家")
+            return
+        if len(results) == 1:
+            self.show_player_profile(results.iloc[0])
+            return
+
+        # 多个结果：弹窗列表，双击查看画像
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"搜索“{query}” — 共 {len(results)} 个结果（双击查看玩家画像）")
+        dlg.resize(750, 500)
+        layout = QVBoxLayout(dlg)
+
+        results = results.reset_index(drop=True)
+        tbl = CopyableTable(len(results), 4)
+        tbl.setHorizontalHeaderLabels(['玩家id', '玩家昵称', '公会名称', '战力'])
+        tbl.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        tbl.verticalHeader().setVisible(False)
+        tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl.setAlternatingRowColors(True)
+        for i, (_, player) in enumerate(results.iterrows()):
+            for j, key in enumerate(['viewer_id', 'user_name', 'join_clan_name', 'total_power']):
+                value = player[key]
+                item = QTableWidgetItem(str(value) if pd.notna(value) else '')
+                item.setTextAlignment(Qt.AlignCenter)
+                tbl.setItem(i, j, item)
+        tbl.cellDoubleClicked.connect(
+            lambda r, c, res=results: self.show_player_profile(res.iloc[r])
+        )
+        layout.addWidget(tbl)
+        dlg.exec_()
+
+    def show_player_profile(self, player):
+        """弹窗显示单个玩家的完整画像（player 为 df 的一行 Series）"""
+        df = self.df
+        power = pd.to_numeric(df['total_power'], errors='coerce')
+        my_power = pd.to_numeric(pd.Series([player['total_power']]), errors='coerce').iloc[0]
+        power_rank = int((power > my_power).sum()) + 1 if pd.notna(my_power) else None
+        rank_rank = int((df['princess_knight_rank'] > player['princess_knight_rank']).sum()) + 1
+        unit_rank = int((df['unit_num'] > player['unit_num']).sum()) + 1
+
+        rows = [
+            ('玩家id', player['viewer_id']),
+            ('玩家昵称', player['user_name']),
+            ('队伍等级', player['team_level']),
+            ('战力', f"{player['total_power']}（全服第 {power_rank} 名）" if power_rank else player['total_power']),
+            ('图鉴数', f"{player['unit_num']}（全服第 {unit_rank} 名）"),
+            ('骑士等级', f"{player['princess_knight_rank']}（全服第 {rank_rank} 名）"),
+            ('公会', f"{player['join_clan_name']}（id: {player['join_clan_id']}）"),
+            ('竞技场排名', f"第 {player['arena_group']} 场 {player['arena_rank']} 名"),
+            ('公主竞技场排名', f"第 {player['grand_arena_group']} 场 {player['grand_arena_rank']} 名"),
+            ('喜爱角色', player['favorite_unit_name']),
+            ('深域通关（火/水/风/光/暗）', ' / '.join(str(player[a]) for a in ['火', '水', '风', '光', '暗'])),
+            ('个人留言', player['user_comment']),
+            ('最后登录', player['last_login_time']),
+            ('数据采集时间', player['collected_at']),
+        ]
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"玩家画像 — {player['user_name']}（{player['viewer_id']}）")
+        dlg.resize(620, 560)
+        layout = QVBoxLayout(dlg)
+
+        hint = QLabel("双击单元格可复制内容")
+        hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
+        layout.addWidget(hint)
+
+        tbl = CopyableTable(len(rows), 2)
+        tbl.setHorizontalHeaderLabels(['字段', '值'])
+        tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        tbl.verticalHeader().setVisible(False)
+        tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl.setAlternatingRowColors(True)
+        for i, (label, value) in enumerate(rows):
+            item_k = QTableWidgetItem(label)
+            item_v = QTableWidgetItem(str(value) if pd.notna(value) else '')
+            tbl.setItem(i, 0, item_k)
+            tbl.setItem(i, 1, item_v)
+        tbl.cellDoubleClicked.connect(lambda r, c, t=tbl: self.copy_cell(t, r, c))
+        layout.addWidget(tbl)
+        dlg.exec_()
 
 # ---------- 入口 ----------
 if __name__ == "__main__":
