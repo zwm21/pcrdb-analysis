@@ -196,6 +196,14 @@ class DataAnalyzer(QMainWindow):
         layout.addWidget(table)
         return widget
 
+    def copy_cell(self, table, row, col):
+        """双击单元格时复制其内容到剪贴板"""
+        item = table.item(row, col)
+        if item is None:
+            return
+        QApplication.clipboard().setText(item.text())
+        self.statusBar.showMessage(f"已复制：{item.text()}", 2000)
+
     def populate_tab(self, tab_widget, data_df, columns, col_keys):
         """替换指定选项卡内的内容为带复制功能的表格"""
         layout = tab_widget.layout()
@@ -228,6 +236,18 @@ class DataAnalyzer(QMainWindow):
         self.populate_tab(self.tab_power, top100,
                           columns=['排名', '战力', '玩家昵称', '玩家id'],
                           col_keys=['排名', '战力', '玩家昵称', '玩家id'])
+
+        # 在表格上方插入提示文字
+        hint = QLabel("双击单元格可复制内容")
+        hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
+        self.tab_power.layout().insertWidget(0, hint)
+
+        # 获取表格并连接双击复制事件
+        table_widget = self.tab_power.findChild(QWidget)
+        if table_widget:
+            tbl = table_widget.findChild(CopyableTable)
+            if tbl:
+                tbl.cellDoubleClicked.connect(lambda r, c, t=tbl: self.copy_cell(t, r, c))
 
     # ---------- 图鉴数分布 ----------
     def build_unit_table(self, df):
@@ -337,6 +357,7 @@ class DataAnalyzer(QMainWindow):
         tbl2.verticalHeader().setVisible(False)
         tbl2.setEditTriggers(QAbstractItemView.NoEditTriggers)
         tbl2.setAlternatingRowColors(True)
+        tbl2.cellDoubleClicked.connect(lambda r, c, t=tbl2: self.copy_cell(t, r, c))
 
         for i, (_, player) in enumerate(filtered.iterrows()):
             for j, key in enumerate(['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id']):
@@ -406,6 +427,10 @@ class DataAnalyzer(QMainWindow):
         layout.addWidget(lbl_info)
 
         # 子选项卡：5个属性表格
+        hint = QLabel("双击关卡编号可查看对应玩家列表")
+        hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
+        layout.addWidget(hint)
+
         sub_tab = QTabWidget()
         for attr in talents:
             counts = df[attr].value_counts().sort_index(ascending=False)
@@ -418,8 +443,22 @@ class DataAnalyzer(QMainWindow):
                 columns=['关卡编号', '通关人数'],
                 col_keys=['关卡编号', '通关人数']
             )
+            tbl = table_widget.findChild(CopyableTable)
+            if tbl:
+                tbl.cellDoubleClicked.connect(
+                    lambda r, c, t=tbl, a=attr: self.show_talent_players(t, a, r)
+                )
             sub_tab.addTab(table_widget, f"{attr}属性")
         layout.addWidget(sub_tab)
+
+    def show_talent_players(self, tbl, attr, row):
+        """双击深域关卡行时，弹窗显示通关该属性该关卡的所有玩家"""
+        level_item = tbl.item(row, 0)
+        if not level_item:
+            return
+        level = int(level_item.text())
+        filtered = self.df[self.df[attr] == level][['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id']]
+        self._choose_sort_and_show(filtered, f"{attr}属性 关卡 {level} — 玩家列表（共 {{}} 人）")
 
 # ---------- 入口 ----------
 if __name__ == "__main__":
