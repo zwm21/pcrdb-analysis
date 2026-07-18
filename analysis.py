@@ -11,6 +11,22 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
 
+# ---------- 剪贴板导出防护 ----------
+def sanitize_for_clipboard(text):
+    """防电子表格公式注入：昵称/公会名/留言等玩家可控字段可能以
+    = + - @ 等开头，粘贴进 Excel/WPS 会被当作公式解析（DDE 注入）。
+    对危险前缀加单引号转义；纯数字（如负数）不受影响。"""
+    if not text:
+        return text
+    if text[0] in ('=', '+', '-', '@', '\t', '\r'):
+        try:
+            float(text)
+            return text  # 合法数字，无注入风险
+        except ValueError:
+            return "'" + text
+    return text
+
+
 # ---------- 支持复制功能的表格类 ----------
 class CopyableTable(QTableWidget):
     def keyPressEvent(self, event):
@@ -36,7 +52,7 @@ class CopyableTable(QTableWidget):
                 row_items = []
                 current_row = row
             item = self.item(row, col)
-            row_items.append(item.text() if item else "")
+            row_items.append(sanitize_for_clipboard(item.text()) if item else "")
         if row_items:
             lines.append("\t".join(row_items))
 
@@ -54,7 +70,7 @@ class CopyableTable(QTableWidget):
             row_items = []
             for c in range(self.columnCount()):
                 item = self.item(r, c)
-                row_items.append(item.text() if item else "")
+                row_items.append(sanitize_for_clipboard(item.text()) if item else "")
             body_lines.append("\t".join(row_items))
 
         full_text = "\t".join(header) + "\n" + "\n".join(body_lines)
@@ -242,8 +258,9 @@ class DataAnalyzer(QMainWindow):
         item = table.item(row, col)
         if item is None:
             return
-        QApplication.clipboard().setText(item.text())
-        self.status_bar.showMessage(f"已复制：{item.text()}", 2000)
+        text = sanitize_for_clipboard(item.text())
+        QApplication.clipboard().setText(text)
+        self.status_bar.showMessage(f"已复制：{text}", 2000)
 
     def populate_tab(self, tab_widget, data_df, columns, col_keys):
         """替换指定选项卡内的内容为带复制功能的表格"""
