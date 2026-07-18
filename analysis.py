@@ -119,15 +119,19 @@ class DataAnalyzer(QMainWindow):
         self.tab_rank = QWidget()
         self.tab_talent = QWidget()
         self.tab_clan = QWidget()
+        self.tab_arena = QWidget()
         self.main_tab.addTab(self.tab_power, "战力前100")
         self.main_tab.addTab(self.tab_unit, "图鉴数分布")
         self.main_tab.addTab(self.tab_rank, "骑士等级分布")
         self.main_tab.addTab(self.tab_talent, "深域关卡")
         self.main_tab.addTab(self.tab_clan, "公会排行")
+        self.main_tab.addTab(self.tab_arena, "竞技场分布")
         self.clan_min_members = 1
         self.clan_sort_key = '公会总战力'
         self.clan_sort_asc = False
         self.clan_search_text = ''
+        self.arena_type_index = 0   # 0=战斗竞技场 1=公主竞技场
+        self.arena_group = '全部'
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -208,6 +212,7 @@ class DataAnalyzer(QMainWindow):
         self.build_rank_table(self.df)
         self.build_talent_tables(self.df)
         self.build_clan_table(self.df)
+        self.build_arena_table(self.df)
 
     # ---------- 带复制按钮的表格生成器 ----------
     def create_copyable_table(self, data_df, columns, col_keys):
@@ -657,6 +662,108 @@ class DataAnalyzer(QMainWindow):
             filtered, f"公会 {clan_name}（id: {clan_id}）— 玩家列表（共 {len(filtered)} 人）",
             headers=['玩家id', '玩家昵称', '战力', '骑士等级'],
             col_keys=['viewer_id', 'user_name', 'total_power', 'princess_knight_rank'])
+
+    # ---------- 竞技场分布 ----------
+    def build_arena_table(self, df=None):
+        if df is None:
+            df = self.df
+        if df is None:
+            return
+
+        layout = self.tab_arena.layout()
+        if layout is None:
+            layout = QVBoxLayout(self.tab_arena)
+        else:
+            while layout.count():
+                child = layout.takeAt(0)
+                if child.widget():
+                    child.widget().deleteLater()
+
+        arena_defs = [
+            ('战斗竞技场', 'arena_group', 'arena_rank'),
+            ('公主竞技场', 'grand_arena_group', 'grand_arena_rank'),
+        ]
+        _, group_col, rank_col = arena_defs[self.arena_type_index]
+
+        # CSV 可能缺少竞技场列，给出提示而不是报错
+        missing = [c for c in ('arena_group', 'arena_rank', 'grand_arena_group', 'grand_arena_rank')
+                   if c not in df.columns]
+        if missing:
+            lbl = QLabel(f"当前 CSV 缺少竞技场相关列：{', '.join(missing)}")
+            lbl.setStyleSheet("color: #a00; margin: 10px;")
+            layout.addWidget(lbl)
+            layout.addStretch()
+            return
+
+        # 筛选栏（放入 QWidget 便于整体清理）
+        bar_widget = QWidget()
+        bar = QHBoxLayout(bar_widget)
+        bar.setContentsMargins(4, 4, 4, 0)
+        bar.addWidget(QLabel("竞技场："))
+        combo_type = QComboBox()
+        combo_type.addItems([name for name, _, _ in arena_defs])
+        combo_type.setCurrentIndex(self.arena_type_index)
+        bar.addWidget(combo_type)
+        bar.addSpacing(12)
+        bar.addWidget(QLabel("组别（场次）："))
+        combo_group = QComboBox()
+        bar.addWidget(combo_group)
+        bar.addStretch()
+        layout.addWidget(bar_widget)
+
+        hint = QLabel("选择竞技场与组别后自动刷新，列表按排名升序；双击单元格可复制内容")
+        hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
+        layout.addWidget(hint)
+
+        # 数据准备
+        data = df.copy()
+        data[group_col] = pd.to_numeric(data[group_col], errors='coerce')
+        data[rank_col] = pd.to_numeric(data[rank_col], errors='coerce')
+        data = data.dropna(subset=[group_col, rank_col])
+
+        # 组别下拉：全部 + 数据中出现的组别
+        groups = sorted(int(g) for g in data[group_col].unique())
+        combo_group.addItem('全部')
+        for g in groups:
+            combo_group.addItem(str(g))
+        if self.arena_group != '全部' and self.arena_group in [str(g) for g in groups]:
+            combo_group.setCurrentText(self.arena_group)
+        else:
+            self.arena_group = '全部'
+
+        # 筛选 + 排名升序（"全部"时先按组别再按排名）
+        view = data
+        if self.arena_group != '全部':
+            view = view[view[group_col] == int(self.arena_group)]
+        view = view.sort_values([group_col, rank_col], ascending=[True, True]).reset_index(drop=True)
+
+        show = view[[group_col, rank_col, 'viewer_id', 'user_name', 'join_clan_name']].copy()
+        show[group_col] = show[group_col].astype(int)
+        show[rank_col] = show[rank_col].astype(int)
+
+        table_widget = self.create_copyable_table(
+            show,
+            columns=['组别', '排名', '玩家id', '玩家昵称', '公会名称'],
+            col_keys=[group_col, rank_col, 'viewer_id', 'user_name', 'join_clan_name']
+        )
+        tbl = table_widget.table
+        tbl.cellDoubleClicked.connect(lambda r, c, t=tbl: self.copy_cell(t, r, c))
+        layout.addWidget(table_widget)
+
+        self.status_bar.showMessage(
+            f"{arena_defs[self.arena_type_index][0]} 组别[{self.arena_group}]：共 {len(show)} 名玩家", 3000)
+
+        # 信号在控件填充完成后再连接，避免初始化期间误触发
+        def on_type_changed(idx):
+            self.arena_type_index = idx
+            self.arena_group = '全部'   # 切换竞技场时组别重置
+            self.build_arena_table()
+        combo_type.currentIndexChanged.connect(on_type_changed)
+
+        def on_group_changed(_idx):
+            self.arena_group = combo_group.currentText()
+            self.build_arena_table()
+        combo_group.currentIndexChanged.connect(on_group_changed)
 
     # ---------- 全局搜索 ----------
     def search_player(self):
