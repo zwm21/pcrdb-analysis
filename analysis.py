@@ -114,6 +114,9 @@ class DataAnalyzer(QMainWindow):
         self.main_tab.addTab(self.tab_talent, "深域关卡")
         self.main_tab.addTab(self.tab_clan, "公会排行")
         self.clan_min_members = 1
+        self.clan_sort_key = '公会总战力'
+        self.clan_sort_asc = False
+        self.clan_search_text = ''
 
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
@@ -346,27 +349,34 @@ class DataAnalyzer(QMainWindow):
         filtered = filtered.reset_index(drop=True)
 
         # 显示玩家列表
-        dlg = QDialog(self)
-        dlg.setWindowTitle(title_template.format(len(filtered)))
-        dlg.resize(750, 500)
-        layout2 = QVBoxLayout(dlg)
+        self._show_player_list(
+            filtered, title_template.format(len(filtered)),
+            headers=['玩家id', '玩家昵称', '公会名称', '公会id'],
+            col_keys=['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id'])
 
-        tbl2 = CopyableTable(len(filtered), 4)
-        tbl2.setHorizontalHeaderLabels(['玩家id', '玩家昵称', '公会名称', '公会id'])
-        tbl2.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        tbl2.verticalHeader().setVisible(False)
-        tbl2.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        tbl2.setAlternatingRowColors(True)
-        tbl2.cellDoubleClicked.connect(lambda r, c, t=tbl2: self.copy_cell(t, r, c))
+    def _show_player_list(self, filtered, title, headers, col_keys):
+        """弹窗显示玩家列表，双击单元格可复制内容"""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.resize(750, 500)
+        layout = QVBoxLayout(dlg)
+
+        tbl = CopyableTable(len(filtered), len(headers))
+        tbl.setHorizontalHeaderLabels(headers)
+        tbl.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        tbl.verticalHeader().setVisible(False)
+        tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        tbl.setAlternatingRowColors(True)
+        tbl.cellDoubleClicked.connect(lambda r, c, t=tbl: self.copy_cell(t, r, c))
 
         for i, (_, player) in enumerate(filtered.iterrows()):
-            for j, key in enumerate(['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id']):
+            for j, key in enumerate(col_keys):
                 value = player[key]
                 item = QTableWidgetItem(str(value) if pd.notna(value) else '')
                 item.setTextAlignment(Qt.AlignCenter)
-                tbl2.setItem(i, j, item)
+                tbl.setItem(i, j, item)
 
-        layout2.addWidget(tbl2)
+        layout.addWidget(tbl)
         dlg.exec_()
 
     def show_rank_players(self, row, _col):
@@ -475,22 +485,49 @@ class DataAnalyzer(QMainWindow):
                 if child.widget():
                     child.widget().deleteLater()
 
-        # 筛选栏（放入 QWidget 便于整体清理）
+        # 筛选/排序/搜索栏（放入 QWidget 便于整体清理）
         bar_widget = QWidget()
-        bar = QHBoxLayout(bar_widget)
+        bar = QVBoxLayout(bar_widget)
         bar.setContentsMargins(4, 4, 4, 0)
-        bar.addWidget(QLabel("仅显示人数 ≥"))
+
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("仅显示人数 ≥"))
         spin = QSpinBox()
         spin.setRange(1, 30)
         spin.setValue(self.clan_min_members)
-        bar.addWidget(spin)
-        bar.addWidget(QLabel("的公会"))
-        btn_apply = QPushButton("应用筛选")
-        bar.addWidget(btn_apply)
-        bar.addStretch()
+        row1.addWidget(spin)
+        row1.addWidget(QLabel("的公会"))
+        row1.addSpacing(16)
+        row1.addWidget(QLabel("排序："))
+        combo_key = QComboBox()
+        sort_keys = ['公会总战力', '人数', '平均骑士等级', '深域平均层数', '公会id']
+        combo_key.addItems(sort_keys)
+        if self.clan_sort_key in sort_keys:
+            combo_key.setCurrentText(self.clan_sort_key)
+        row1.addWidget(combo_key)
+        combo_order = QComboBox()
+        combo_order.addItems(['降序', '升序'])
+        combo_order.setCurrentIndex(1 if self.clan_sort_asc else 0)
+        row1.addWidget(combo_order)
+        btn_apply = QPushButton("应用")
+        row1.addWidget(btn_apply)
+        row1.addStretch()
+        bar.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("搜索公会名："))
+        search_edit = QLineEdit()
+        search_edit.setPlaceholderText("输入公会名关键字，留空显示全部")
+        search_edit.setFixedWidth(220)
+        search_edit.setText(self.clan_search_text)
+        row2.addWidget(search_edit)
+        btn_clear = QPushButton("清除搜索")
+        row2.addWidget(btn_clear)
+        row2.addStretch()
+        bar.addLayout(row2)
         layout.addWidget(bar_widget)
 
-        hint = QLabel("按公会总战力排行；双击单元格可复制内容")
+        hint = QLabel("双击公会id或公会名称可查看该公会玩家列表（按玩家id升序）；双击其他单元格复制内容")
         hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
         layout.addWidget(hint)
 
@@ -510,10 +547,20 @@ class DataAnalyzer(QMainWindow):
         clan['平均骑士等级'] = clan['平均骑士等级'].round(2)
         clan['深域平均层数'] = clan['深域平均层数'].round(2)
         clan['join_clan_id'] = clan['join_clan_id'].astype('Int64')
+
+        # 排名始终按公会总战力降序编号（搜索/自选排序不改变排名归属）
         clan = clan.sort_values('公会总战力', ascending=False).reset_index(drop=True)
         clan.index += 1
         clan.reset_index(inplace=True)
         clan = clan.rename(columns={'index': '排名', 'join_clan_id': '公会id'})
+
+        # 公会名搜索（子串匹配，忽略大小写）
+        if self.clan_search_text:
+            clan = clan[clan['公会名称'].astype(str).str.contains(
+                self.clan_search_text, case=False, na=False, regex=False)]
+
+        # 自选排序
+        clan = clan.sort_values(self.clan_sort_key, ascending=self.clan_sort_asc).reset_index(drop=True)
 
         table_widget = self.create_copyable_table(
             clan,
@@ -521,13 +568,47 @@ class DataAnalyzer(QMainWindow):
             col_keys=['排名', '公会id', '公会名称', '人数', '公会总战力', '平均骑士等级', '深域平均层数']
         )
         tbl = table_widget.table
-        tbl.cellDoubleClicked.connect(lambda r, c, t=tbl: self.copy_cell(t, r, c))
+        # 公会id/公会名称列双击查看玩家列表，其余列双击复制
+        tbl.cellDoubleClicked.connect(
+            lambda r, c, t=tbl: self.show_clan_players(t, r) if c in (1, 2) else self.copy_cell(t, r, c)
+        )
         layout.addWidget(table_widget)
+
+        if self.clan_search_text:
+            self.statusBar.showMessage(f"公会名包含“{self.clan_search_text}”：共 {len(clan)} 个公会", 3000)
 
         def apply_filter():
             self.clan_min_members = spin.value()
+            self.clan_sort_key = combo_key.currentText()
+            self.clan_sort_asc = (combo_order.currentIndex() == 1)
+            self.clan_search_text = search_edit.text().strip()
             self.build_clan_table()
         btn_apply.clicked.connect(apply_filter)
+        search_edit.returnPressed.connect(apply_filter)
+
+        def clear_search():
+            search_edit.setText('')
+            apply_filter()
+        btn_clear.clicked.connect(clear_search)
+
+    def show_clan_players(self, tbl, row):
+        """双击公会行时，弹窗显示该公会全部玩家（按玩家id升序）"""
+        id_item = tbl.item(row, 1)
+        name_item = tbl.item(row, 2)
+        if not id_item:
+            return
+        try:
+            clan_id = int(id_item.text())
+        except ValueError:
+            return
+        clan_name = name_item.text() if name_item else ''
+        filtered = self.df[self.df['join_clan_id'] == clan_id][
+            ['viewer_id', 'user_name', 'total_power', 'princess_knight_rank']]
+        filtered = filtered.sort_values('viewer_id', ascending=True).reset_index(drop=True)
+        self._show_player_list(
+            filtered, f"公会 {clan_name}（id: {clan_id}）— 玩家列表（共 {len(filtered)} 人）",
+            headers=['玩家id', '玩家昵称', '战力', '骑士等级'],
+            col_keys=['viewer_id', 'user_name', 'total_power', 'princess_knight_rank'])
 
     # ---------- 全局搜索 ----------
     def search_player(self):
