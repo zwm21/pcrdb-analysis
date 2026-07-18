@@ -1,5 +1,6 @@
 import sys
 import ast
+import traceback
 import pandas as pd
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -20,32 +21,26 @@ class CopyableTable(QTableWidget):
             super().keyPressEvent(event)
 
     def copy_selection(self):
-        """复制选中单元格，用制表符分隔列，换行分隔行"""
-        selected = self.selectedRanges()
-        if not selected:
+        """复制选中单元格：仅包含实际选中的单元格，制表符分隔列，换行分隔行"""
+        cells = sorted({(idx.row(), idx.column()) for idx in self.selectedIndexes()})
+        if not cells:
             return
 
-        # 获取选中范围的最小/最大行列
-        rows = set()
-        cols = set()
-        for r in selected:
-            for row in range(r.topRow(), r.bottomRow() + 1):
-                for col in range(r.leftColumn(), r.rightColumn() + 1):
-                    rows.add(row)
-                    cols.add(col)
-        rows = sorted(rows)
-        cols = sorted(cols)
+        lines = []
+        current_row = None
+        row_items = []
+        for row, col in cells:
+            if row != current_row:
+                if row_items:
+                    lines.append("\t".join(row_items))
+                row_items = []
+                current_row = row
+            item = self.item(row, col)
+            row_items.append(item.text() if item else "")
+        if row_items:
+            lines.append("\t".join(row_items))
 
-        text_lines = []
-        for row in rows:
-            line_items = []
-            for col in cols:
-                item = self.item(row, col)
-                line_items.append(item.text() if item else "")
-            text_lines.append("\t".join(line_items))
-        clipboard_text = "\n".join(text_lines)
-
-        QApplication.clipboard().setText(clipboard_text)
+        QApplication.clipboard().setText("\n".join(lines))
 
     def copy_all(self):
         """复制整个表格（包括表头）"""
@@ -118,8 +113,8 @@ class DataAnalyzer(QMainWindow):
         self.clan_sort_asc = False
         self.clan_search_text = ''
 
-        self.statusBar = QStatusBar()
-        self.setStatusBar(self.statusBar)
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
 
         if auto_file:
             self.load_csv_file(auto_file)
@@ -129,13 +124,13 @@ class DataAnalyzer(QMainWindow):
         """加载指定的 CSV 文件并刷新所有表格"""
         self.label_file.setText(filepath)
         try:
-            self.statusBar.showMessage("正在加载数据...")
+            self.status_bar.showMessage("正在加载数据...")
             self.df = self.load_data(filepath)
-            self.statusBar.showMessage(f"加载完成，共 {len(self.df)} 条记录")
+            self.status_bar.showMessage(f"加载完成，共 {len(self.df)} 条记录")
             self.create_all_tables()
         except Exception as e:
             QMessageBox.critical(self, "错误", f"数据加载失败：{str(e)}")
-            self.statusBar.showMessage("加载失败")
+            self.status_bar.showMessage("加载失败")
 
     def select_file(self):
         filepath, _ = QFileDialog.getOpenFileName(
@@ -147,16 +142,41 @@ class DataAnalyzer(QMainWindow):
         self.load_csv_file(filepath)
 
     def load_data(self, filepath):
-        df = pd.read_csv(filepath)
+        # 兼容 UTF-8（含 BOM）和 GBK 编码
+        df = None
+        for enc in ('utf-8-sig', 'gbk'):
+            try:
+                df = pd.read_csv(filepath, encoding=enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        if df is None:
+            raise ValueError("无法识别文件编码（已尝试 UTF-8/GBK），请将文件另存为 UTF-8 编码后重试")
         df.columns = df.columns.str.strip()
 
+        # 校验必需列，缺列时给出明确提示而不是后续 KeyError
+        required = ['viewer_id', 'user_name', 'unit_num', 'total_power',
+                    'princess_knight_rank', 'join_clan_id', 'join_clan_name',
+                    'talent_quest_clear']
+        missing = [c for c in required if c not in df.columns]
+        if missing:
+            raise ValueError(f"CSV 缺少必需列：{', '.join(missing)}")
+
         def parse_talent(x):
-            if isinstance(x, str):
-                try:
-                    return ast.literal_eval(x)
-                except:
-                    return [0,0,0,0,0]
-            return [0,0,0,0,0]
+            """解析深域通关字段，任何格式/类型不符都回退为全 0"""
+            default = [0, 0, 0, 0, 0]
+            if not isinstance(x, str):
+                return default
+            try:
+                v = ast.literal_eval(x)
+            except (ValueError, SyntaxError):
+                return default
+            if not isinstance(v, (list, tuple)) or len(v) != 5:
+                return default
+            try:
+                return [int(e) for e in v]
+            except (TypeError, ValueError):
+                return default
 
         talent_list = df['talent_quest_clear'].apply(parse_talent)
         talent_df = pd.DataFrame(talent_list.tolist(), columns=['火', '水', '风', '光', '暗'])
@@ -200,7 +220,8 @@ class DataAnalyzer(QMainWindow):
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setAlternatingRowColors(True)
 
-        for i, row in data_df.iterrows():
+        # 用 enumerate 生成行位置，避免把 DataFrame 索引值当作表格行号
+        for i, (_, row) in enumerate(data_df.iterrows()):
             for j, key in enumerate(col_keys):
                 value = row[key]
                 item = QTableWidgetItem(str(value))
@@ -222,7 +243,7 @@ class DataAnalyzer(QMainWindow):
         if item is None:
             return
         QApplication.clipboard().setText(item.text())
-        self.statusBar.showMessage(f"已复制：{item.text()}", 2000)
+        self.status_bar.showMessage(f"已复制：{item.text()}", 2000)
 
     def populate_tab(self, tab_widget, data_df, columns, col_keys):
         """替换指定选项卡内的内容为带复制功能的表格"""
@@ -387,7 +408,11 @@ class DataAnalyzer(QMainWindow):
         rank_item = tbl.item(row, 0)
         if not rank_item:
             return
-        rank = int(rank_item.text())
+        try:
+            # 列含空值时 pandas 会转成 float，单元格可能显示 "338.0"
+            rank = int(float(rank_item.text()))
+        except ValueError:
+            return
         filtered = self.df[self.df['princess_knight_rank'] == rank][['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id']]
         self._choose_sort_and_show(filtered, f"骑士等级 {rank} — 玩家列表（共 {{}} 人）")
 
@@ -399,7 +424,10 @@ class DataAnalyzer(QMainWindow):
         unit_item = tbl.item(row, 0)
         if not unit_item:
             return
-        unit_num = int(unit_item.text())
+        try:
+            unit_num = int(float(unit_item.text()))
+        except ValueError:
+            return
         filtered = self.df[self.df['unit_num'] == unit_num][['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id']]
         self._choose_sort_and_show(filtered, f"图鉴数 {unit_num} — 玩家列表（共 {{}} 人）")
 
@@ -465,7 +493,10 @@ class DataAnalyzer(QMainWindow):
         level_item = tbl.item(row, 0)
         if not level_item:
             return
-        level = int(level_item.text())
+        try:
+            level = int(float(level_item.text()))
+        except ValueError:
+            return
         filtered = self.df[self.df[attr] == level][['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id']]
         self._choose_sort_and_show(filtered, f"{attr}属性 关卡 {level} — 玩家列表（共 {{}} 人）")
 
@@ -575,7 +606,7 @@ class DataAnalyzer(QMainWindow):
         layout.addWidget(table_widget)
 
         if self.clan_search_text:
-            self.statusBar.showMessage(f"公会名包含“{self.clan_search_text}”：共 {len(clan)} 个公会", 3000)
+            self.status_bar.showMessage(f"公会名包含“{self.clan_search_text}”：共 {len(clan)} 个公会", 3000)
 
         def apply_filter():
             self.clan_min_members = spin.value()
@@ -706,7 +737,23 @@ class DataAnalyzer(QMainWindow):
         dlg.exec_()
 
 # ---------- 入口 ----------
+def _excepthook(exc_type, exc_value, exc_tb):
+    """全局异常兜底。
+
+    PyQt5 >= 5.5 中槽函数内未捕获的 Python 异常会触发 qFatal 直接终止进程，
+    这里改为打印堆栈并弹窗提示，让程序继续运行。
+    """
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        return
+    msg = ''.join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    sys.stderr.write(msg)
+    QMessageBox.critical(None, "程序错误",
+                         f"发生未处理的异常：{exc_value}\n\n{msg[-1500:]}")
+
+
 if __name__ == "__main__":
+    sys.excepthook = _excepthook
     auto_file = sys.argv[1] if len(sys.argv) > 1 else None
     app = QApplication(sys.argv)
     window = DataAnalyzer(auto_file=auto_file)
