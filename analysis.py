@@ -5,20 +5,25 @@ import pandas as pd
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QPushButton, QVBoxLayout, QHBoxLayout,
     QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QFileDialog,
-    QMessageBox, QStatusBar, QAbstractItemView, QMenu, QAction, QDialog,
+    QMessageBox, QStatusBar, QAbstractItemView, QDialog,
     QComboBox, QLineEdit, QSpinBox
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QKeySequence
 
 # ---------- 剪贴板导出防护 ----------
 def sanitize_for_clipboard(text):
     """防电子表格公式注入：昵称/公会名/留言等玩家可控字段可能以
     = + - @ 等开头，粘贴进 Excel/WPS 会被当作公式解析（DDE 注入）。
-    对危险前缀加单引号转义；纯数字（如负数）不受影响。"""
+    对危险前缀加单引号转义；纯数字（如负数）不受影响。
+    同时清洗字段内嵌的 \\t/\\r/\\n：CSV 引号字段允许包含它们（多行留言等），
+    粘贴 TSV 时会拆列/拆行，既破坏对齐，也会让换行后的内容落在新单元格
+    开头，从而绕过仅检查首字符的前缀转义。"""
     if not text:
         return text
-    if text[0] in ('=', '+', '-', '@', '\t', '\r'):
+    for ch in ('\t', '\r', '\n'):
+        if ch in text:
+            text = text.replace(ch, ' ')
+    if text[0] in ('=', '+', '-', '@'):
         try:
             float(text)
             return text  # 合法数字，无注入风险
@@ -142,10 +147,11 @@ class DataAnalyzer(QMainWindow):
     # ---------- 数据加载 ----------
     def load_csv_file(self, filepath):
         """加载指定的 CSV 文件并刷新所有表格"""
-        self.label_file.setText(filepath)
         try:
             self.status_bar.showMessage("正在加载数据...")
             self.df = self.load_data(filepath)
+            # 成功后才更新文件标签，避免失败时"标签显示新文件、表格仍是旧数据"
+            self.label_file.setText(filepath)
             self.status_bar.showMessage(f"加载完成，共 {len(self.df)} 条记录")
             self.create_all_tables()
         except Exception as e:
@@ -619,17 +625,19 @@ class DataAnalyzer(QMainWindow):
             平均骑士等级=('princess_knight_rank', 'mean'),
             深域平均层数=('深域平均', 'mean'),
         ).reset_index()
-        clan = clan[clan['人数'] >= self.clan_min_members]
         clan['公会平均战力'] = clan['公会平均战力'].round(0).astype('Int64')
         clan['平均骑士等级'] = clan['平均骑士等级'].round(2)
         clan['深域平均层数'] = clan['深域平均层数'].round(2)
         clan['join_clan_id'] = clan['join_clan_id'].astype('Int64')
 
-        # 排名始终按公会平均战力降序编号（搜索/自选排序不改变排名归属）
+        # 排名始终按公会平均战力降序编号（人数筛选/搜索/自选排序均不改变排名归属）
         clan = clan.sort_values('公会平均战力', ascending=False).reset_index(drop=True)
         clan.index += 1
         clan.reset_index(inplace=True)
         clan = clan.rename(columns={'index': '排名', 'join_clan_id': '公会id'})
+
+        # 人数筛选：放在编号之后，只隐藏行、不重排名次（与搜索行为一致）
+        clan = clan[clan['人数'] >= self.clan_min_members]
 
         # 公会名搜索（子串匹配，忽略大小写）
         if self.clan_search_text:
@@ -839,6 +847,19 @@ class DataAnalyzer(QMainWindow):
     def show_player_profile(self, player):
         """弹窗显示单个玩家的完整画像（player 为 df 的一行 Series）"""
         df = self.df
+
+        def val(col):
+            """可选列容错：CSV 缺列或值为空时显示 '-'，避免 KeyError 弹错误框"""
+            if col in player.index and pd.notna(player[col]):
+                return player[col]
+            return '-'
+
+        def fmt_arena(g_col, r_col):
+            g, r = val(g_col), val(r_col)
+            if g == '-' and r == '-':
+                return '-'
+            return f"第 {g} 场 {r} 名"
+
         power = pd.to_numeric(df['total_power'], errors='coerce')
         my_power = pd.to_numeric(pd.Series([player['total_power']]), errors='coerce').iloc[0]
         power_rank = int((power > my_power).sum()) + 1 if pd.notna(my_power) else None
@@ -848,18 +869,18 @@ class DataAnalyzer(QMainWindow):
         rows = [
             ('玩家id', player['viewer_id']),
             ('玩家昵称', player['user_name']),
-            ('队伍等级', player['team_level']),
+            ('队伍等级', val('team_level')),
             ('战力', f"{player['total_power']}（全服第 {power_rank} 名）" if power_rank else player['total_power']),
             ('图鉴数', f"{player['unit_num']}（全服第 {unit_rank} 名）"),
             ('骑士等级', f"{player['princess_knight_rank']}（全服第 {rank_rank} 名）"),
             ('公会', f"{player['join_clan_name']}（id: {player['join_clan_id']}）"),
-            ('竞技场排名', f"第 {player['arena_group']} 场 {player['arena_rank']} 名"),
-            ('公主竞技场排名', f"第 {player['grand_arena_group']} 场 {player['grand_arena_rank']} 名"),
-            ('喜爱角色', player['favorite_unit_name']),
+            ('竞技场排名', fmt_arena('arena_group', 'arena_rank')),
+            ('公主竞技场排名', fmt_arena('grand_arena_group', 'grand_arena_rank')),
+            ('喜爱角色', val('favorite_unit_name')),
             ('深域通关（火/水/风/光/暗）', ' / '.join(str(player[a]) for a in ['火', '水', '风', '光', '暗'])),
-            ('个人留言', player['user_comment']),
-            ('最后登录', player['last_login_time']),
-            ('数据采集时间', player['collected_at']),
+            ('个人留言', val('user_comment')),
+            ('最后登录', val('last_login_time')),
+            ('数据采集时间', val('collected_at')),
         ]
 
         dlg = QDialog(self)
@@ -898,7 +919,8 @@ def _excepthook(exc_type, exc_value, exc_tb):
         sys.__excepthook__(exc_type, exc_value, exc_tb)
         return
     msg = ''.join(traceback.format_exception(exc_type, exc_value, exc_tb))
-    sys.stderr.write(msg)
+    if sys.stderr:  # PyInstaller --noconsole 下 stderr 可能为 None
+        sys.stderr.write(msg)
     QMessageBox.critical(None, "程序错误",
                          f"发生未处理的异常：{exc_value}\n\n{msg[-1500:]}")
 
