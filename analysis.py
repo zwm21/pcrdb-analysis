@@ -127,7 +127,7 @@ class DataAnalyzer(QMainWindow):
         self.main_tab.addTab(self.tab_clan, "公会排行")
         self.main_tab.addTab(self.tab_arena, "竞技场分布")
         self.clan_min_members = 1
-        self.clan_sort_key = '公会总战力'
+        self.clan_sort_key = '公会平均战力'
         self.clan_sort_asc = False
         self.clan_search_text = ''
         self.arena_type_index = 0   # 0=战斗竞技场 1=公主竞技场
@@ -553,7 +553,7 @@ class DataAnalyzer(QMainWindow):
         row1.addSpacing(16)
         row1.addWidget(QLabel("排序："))
         combo_key = QComboBox()
-        sort_keys = ['公会总战力', '人数', '平均骑士等级', '深域平均层数', '公会id']
+        sort_keys = ['公会平均战力', '人数', '平均骑士等级', '深域平均层数', '公会id']
         combo_key.addItems(sort_keys)
         if self.clan_sort_key in sort_keys:
             combo_key.setCurrentText(self.clan_sort_key)
@@ -591,18 +591,18 @@ class DataAnalyzer(QMainWindow):
         clan = data.groupby('join_clan_id').agg(
             公会名称=('join_clan_name', 'first'),
             人数=('viewer_id', 'count'),
-            公会总战力=('total_power', 'sum'),
+            公会平均战力=('total_power', 'mean'),
             平均骑士等级=('princess_knight_rank', 'mean'),
             深域平均层数=('深域平均', 'mean'),
         ).reset_index()
         clan = clan[clan['人数'] >= self.clan_min_members]
-        clan['公会总战力'] = clan['公会总战力'].round(0).astype('Int64')
+        clan['公会平均战力'] = clan['公会平均战力'].round(0).astype('Int64')
         clan['平均骑士等级'] = clan['平均骑士等级'].round(2)
         clan['深域平均层数'] = clan['深域平均层数'].round(2)
         clan['join_clan_id'] = clan['join_clan_id'].astype('Int64')
 
-        # 排名始终按公会总战力降序编号（搜索/自选排序不改变排名归属）
-        clan = clan.sort_values('公会总战力', ascending=False).reset_index(drop=True)
+        # 排名始终按公会平均战力降序编号（搜索/自选排序不改变排名归属）
+        clan = clan.sort_values('公会平均战力', ascending=False).reset_index(drop=True)
         clan.index += 1
         clan.reset_index(inplace=True)
         clan = clan.rename(columns={'index': '排名', 'join_clan_id': '公会id'})
@@ -617,8 +617,8 @@ class DataAnalyzer(QMainWindow):
 
         table_widget = self.create_copyable_table(
             clan,
-            columns=['排名', '公会id', '公会名称', '人数', '公会总战力', '平均骑士等级', '深域平均层数'],
-            col_keys=['排名', '公会id', '公会名称', '人数', '公会总战力', '平均骑士等级', '深域平均层数']
+            columns=['排名', '公会id', '公会名称', '人数', '公会平均战力', '平均骑士等级', '深域平均层数'],
+            col_keys=['排名', '公会id', '公会名称', '人数', '公会平均战力', '平均骑士等级', '深域平均层数']
         )
         tbl = table_widget.table
         # 公会id/公会名称列双击查看玩家列表，其余列双击复制
