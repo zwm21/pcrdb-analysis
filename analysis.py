@@ -258,6 +258,26 @@ class DataAnalyzer(QMainWindow):
         widget.table = table
         return widget
 
+    def _open_profile_by_viewer_id(self, viewer_id_text):
+        """按 viewer_id 从 self.df 查完整行，调用 show_player_profile"""
+        try:
+            vid = int(float(viewer_id_text))
+        except (ValueError, TypeError):
+            return
+        match = self.df[self.df['viewer_id'] == vid]
+        if match.empty:
+            return
+        self.show_player_profile(match.iloc[0])
+
+    def _route_double_click(self, tbl, row, col, name_col, id_col):
+        """双击路由：点击玩家昵称列时查看玩家画像，其余列复制内容"""
+        if col == name_col:
+            id_item = tbl.item(row, id_col)
+            if id_item:
+                self._open_profile_by_viewer_id(id_item.text())
+        else:
+            self.copy_cell(tbl, row, col)
+
     def copy_cell(self, table, row, col):
         """双击单元格时复制其内容到剪贴板"""
         item = table.item(row, col)
@@ -300,10 +320,12 @@ class DataAnalyzer(QMainWindow):
         tbl = self.populate_tab(self.tab_power, top100,
                                 columns=['排名', '战力', '玩家昵称', '玩家id'],
                                 col_keys=['排名', '战力', '玩家昵称', '玩家id'])
-        tbl.cellDoubleClicked.connect(lambda r, c, t=tbl: self.copy_cell(t, r, c))
+        # 玩家昵称列（col 2）双击查看画像，其余双击复制；玩家id 在 col 3
+        tbl.cellDoubleClicked.connect(
+            lambda r, c, t=tbl: self._route_double_click(t, r, c, name_col=2, id_col=3))
 
         # 在表格上方插入提示文字
-        hint = QLabel("双击单元格可复制内容")
+        hint = QLabel("双击玩家昵称查看画像，双击其他单元格复制内容")
         hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
         self.tab_power.layout().insertWidget(0, hint)
 
@@ -398,7 +420,7 @@ class DataAnalyzer(QMainWindow):
             col_keys=['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id'])
 
     def _show_player_list(self, filtered, title, headers, col_keys):
-        """弹窗显示玩家列表，双击单元格可复制内容"""
+        """弹窗显示玩家列表：双击玩家昵称查看画像，双击其他单元格复制内容"""
         dlg = QDialog(self)
         dlg.setWindowTitle(title)
         dlg.resize(750, 500)
@@ -410,7 +432,9 @@ class DataAnalyzer(QMainWindow):
         tbl.verticalHeader().setVisible(False)
         tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
         tbl.setAlternatingRowColors(True)
-        tbl.cellDoubleClicked.connect(lambda r, c, t=tbl: self.copy_cell(t, r, c))
+        # 玩家昵称列（col 1）双击查看画像，其余双击复制；viewer_id 固定在 col 0
+        tbl.cellDoubleClicked.connect(
+            lambda r, c, t=tbl: self._route_double_click(t, r, c, name_col=1, id_col=0))
 
         for i, (_, player) in enumerate(filtered.iterrows()):
             for j, key in enumerate(col_keys):
@@ -711,7 +735,7 @@ class DataAnalyzer(QMainWindow):
         bar.addStretch()
         layout.addWidget(bar_widget)
 
-        hint = QLabel("选择竞技场与组别后自动刷新，列表按排名升序；双击单元格可复制内容")
+        hint = QLabel("选择竞技场与组别后自动刷新，列表按排名升序；双击玩家昵称查看画像，双击其他单元格复制内容")
         hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
         layout.addWidget(hint)
 
@@ -747,7 +771,10 @@ class DataAnalyzer(QMainWindow):
             col_keys=[group_col, rank_col, 'viewer_id', 'user_name', 'join_clan_name']
         )
         tbl = table_widget.table
-        tbl.cellDoubleClicked.connect(lambda r, c, t=tbl: self.copy_cell(t, r, c))
+        # 竞技场表：列顺序 组别(0) 排名(1) 玩家id(2) 玩家昵称(3) 公会名称(4)
+        # 双击昵称列查看画像，其余列复制
+        tbl.cellDoubleClicked.connect(
+            lambda r, c, t=tbl: self._route_double_click(t, r, c, name_col=3, id_col=2))
         layout.addWidget(table_widget)
 
         self.status_bar.showMessage(
