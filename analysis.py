@@ -122,12 +122,14 @@ class DataAnalyzer(QMainWindow):
         self.tab_power = QWidget()
         self.tab_unit = QWidget()
         self.tab_rank = QWidget()
+        self.tab_level = QWidget()
         self.tab_talent = QWidget()
         self.tab_clan = QWidget()
         self.tab_arena = QWidget()
         self.main_tab.addTab(self.tab_power, "战力前100")
         self.main_tab.addTab(self.tab_unit, "图鉴数分布")
         self.main_tab.addTab(self.tab_rank, "骑士等级分布")
+        self.main_tab.addTab(self.tab_level, "玩家等级分布")
         self.main_tab.addTab(self.tab_talent, "深域关卡")
         self.main_tab.addTab(self.tab_clan, "公会排行")
         self.main_tab.addTab(self.tab_arena, "竞技场分布")
@@ -216,6 +218,7 @@ class DataAnalyzer(QMainWindow):
         self.build_power_table(self.df)
         self.build_unit_table(self.df)
         self.build_rank_table(self.df)
+        self.build_level_table(self.df)
         self.build_talent_tables(self.df)
         self.build_clan_table(self.df)
         self.build_arena_table(self.df)
@@ -369,6 +372,39 @@ class DataAnalyzer(QMainWindow):
         hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
         self.tab_rank.layout().insertWidget(0, hint)
 
+    # ---------- 玩家等级分布 ----------
+    def build_level_table(self, df):
+        # team_level 为非必需列，缺列时页签内提示而不是整体加载失败
+        if 'team_level' not in df.columns:
+            layout = self.tab_level.layout()
+            if layout is None:
+                layout = QVBoxLayout(self.tab_level)
+            else:
+                while layout.count():
+                    child = layout.takeAt(0)
+                    if child.widget():
+                        child.widget().deleteLater()
+            lbl = QLabel("当前 CSV 缺少玩家等级列：team_level")
+            lbl.setStyleSheet("color: #a00; margin: 10px;")
+            layout.addWidget(lbl)
+            layout.addStretch()
+            return
+
+        level_counts = df['team_level'].value_counts().sort_index(ascending=False)
+        level_df = level_counts.reset_index()
+        level_df.columns = ['level', 'count']
+        level_df = level_df.sort_values('level', ascending=False)
+
+        tbl = self.populate_tab(self.tab_level, level_df,
+                                columns=['玩家等级', '玩家数量'],
+                                col_keys=['level', 'count'])
+        tbl.cellDoubleClicked.connect(self.show_level_players)
+
+        # 在表格上方插入提示文字
+        hint = QLabel("双击玩家等级可查看对应玩家列表")
+        hint.setStyleSheet("color: #666; font-size: 9pt; margin: 4px;")
+        self.tab_level.layout().insertWidget(0, hint)
+
     def _choose_sort_and_show(self, filtered, title_template):
         """弹出排序选择窗口，排序后显示玩家列表"""
         dlg_sort = QDialog(self)
@@ -482,6 +518,22 @@ class DataAnalyzer(QMainWindow):
             return
         filtered = self.df[self.df['unit_num'] == unit_num][['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id']]
         self._choose_sort_and_show(filtered, f"图鉴数 {unit_num} — 玩家列表（共 {{}} 人）")
+
+    def show_level_players(self, row, _col):
+        """双击玩家等级行时，弹窗显示该等级下所有玩家"""
+        tbl = self.sender()
+        if not isinstance(tbl, QTableWidget):
+            return
+        level_item = tbl.item(row, 0)
+        if not level_item:
+            return
+        try:
+            # 列含空值时 pandas 会转成 float，单元格可能显示 "348.0"
+            level = int(float(level_item.text()))
+        except ValueError:
+            return
+        filtered = self.df[self.df['team_level'] == level][['viewer_id', 'user_name', 'join_clan_name', 'join_clan_id']]
+        self._choose_sort_and_show(filtered, f"玩家等级 {level} — 玩家列表（共 {{}} 人）")
 
     # ---------- 深域关卡 ----------
     def build_talent_tables(self, df):
