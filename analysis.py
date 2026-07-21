@@ -191,6 +191,10 @@ class DataAnalyzer(QMainWindow):
         if missing:
             raise ValueError(f"CSV 缺少必需列：{', '.join(missing)}")
 
+        # join_clan_id 为整数，但存在无公会玩家（空值）时 pandas 会把整列升为
+        # float，显示出 "902.0"；统一转为可空整数 Int64，空值保留为 NA
+        df['join_clan_id'] = pd.to_numeric(df['join_clan_id'], errors='coerce').astype('Int64')
+
         def parse_talent(x):
             """解析深域通关字段，任何格式/类型不符都回退为全 0"""
             default = [0, 0, 0, 0, 0]
@@ -948,7 +952,8 @@ class DataAnalyzer(QMainWindow):
             ('战力', f"{player['total_power']}（全服第 {power_rank} 名）" if power_rank else player['total_power']),
             ('图鉴数', f"{player['unit_num']}（全服第 {unit_rank} 名）"),
             ('骑士等级', f"{player['princess_knight_rank']}（全服第 {rank_rank} 名）" if has_rank else '-'),
-            ('公会', f"{player['join_clan_name']}（id: {player['join_clan_id']}）"),
+            ('公会', f"{player['join_clan_name']}（id: {player['join_clan_id']}）"
+                     if pd.notna(player['join_clan_id']) else '-'),
             ('竞技场排名', fmt_arena('arena_group', 'arena_rank')),
             ('公主竞技场排名', fmt_arena('grand_arena_group', 'grand_arena_rank')),
             ('喜爱角色', val('favorite_unit_name')),
