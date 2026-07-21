@@ -183,8 +183,9 @@ class DataAnalyzer(QMainWindow):
         df.columns = df.columns.str.strip()
 
         # 校验必需列，缺列时给出明确提示而不是后续 KeyError
+        # （princess_knight_rank 为非必需列：古早 CSV 没有，缺列时骑士等级分布页签隐藏、相关列降级）
         required = ['viewer_id', 'user_name', 'unit_num', 'total_power',
-                    'princess_knight_rank', 'join_clan_id', 'join_clan_name',
+                    'join_clan_id', 'join_clan_name',
                     'talent_quest_clear']
         missing = [c for c in required if c not in df.columns]
         if missing:
@@ -357,6 +358,14 @@ class DataAnalyzer(QMainWindow):
 
     # ---------- 骑士等级分布 ----------
     def build_rank_table(self, df):
+        # 古早 CSV 缺少 princess_knight_rank 列：隐藏整个页签，其余功能不受影响；
+        # 再次加载含该列的 CSV 时页签自动恢复
+        tab_idx = self.main_tab.indexOf(self.tab_rank)
+        if 'princess_knight_rank' not in df.columns:
+            self.main_tab.setTabVisible(tab_idx, False)
+            return
+        self.main_tab.setTabVisible(tab_idx, True)
+
         rank_counts = df['princess_knight_rank'].value_counts().sort_index(ascending=False)
         rank_df = rank_counts.reset_index()
         rank_df.columns = ['rank', 'count']
@@ -635,10 +644,16 @@ class DataAnalyzer(QMainWindow):
         row1.addSpacing(16)
         row1.addWidget(QLabel("排序："))
         combo_key = QComboBox()
+        # 古早 CSV 缺少 princess_knight_rank 列时，骑士等级相关列/排序项降级
+        has_rank = 'princess_knight_rank' in df.columns
         sort_keys = ['公会平均战力', '人数', '平均骑士等级', '深域平均层数', '公会id']
+        if not has_rank:
+            sort_keys.remove('平均骑士等级')
         combo_key.addItems(sort_keys)
-        if self.clan_sort_key in sort_keys:
-            combo_key.setCurrentText(self.clan_sort_key)
+        # 上一份 CSV 残留的排序键在当前 CSV 下不可用时回退默认，避免 sort_values KeyError
+        if self.clan_sort_key not in sort_keys:
+            self.clan_sort_key = '公会平均战力'
+        combo_key.setCurrentText(self.clan_sort_key)
         row1.addWidget(combo_key)
         combo_order = QComboBox()
         combo_order.addItems(['降序', '升序'])
@@ -670,15 +685,18 @@ class DataAnalyzer(QMainWindow):
         data = df.dropna(subset=['join_clan_id']).copy()
         data['total_power'] = pd.to_numeric(data['total_power'], errors='coerce')
         data['深域平均'] = data[['火', '水', '风', '光', '暗']].mean(axis=1)
-        clan = data.groupby('join_clan_id').agg(
+        agg_kwargs = dict(
             公会名称=('join_clan_name', 'first'),
             人数=('viewer_id', 'count'),
             公会平均战力=('total_power', 'mean'),
-            平均骑士等级=('princess_knight_rank', 'mean'),
             深域平均层数=('深域平均', 'mean'),
-        ).reset_index()
+        )
+        if has_rank:
+            agg_kwargs['平均骑士等级'] = ('princess_knight_rank', 'mean')
+        clan = data.groupby('join_clan_id').agg(**agg_kwargs).reset_index()
         clan['公会平均战力'] = clan['公会平均战力'].round(0).astype('Int64')
-        clan['平均骑士等级'] = clan['平均骑士等级'].round(2)
+        if has_rank:
+            clan['平均骑士等级'] = clan['平均骑士等级'].round(2)
         clan['深域平均层数'] = clan['深域平均层数'].round(2)
         clan['join_clan_id'] = clan['join_clan_id'].astype('Int64')
 
@@ -699,11 +717,10 @@ class DataAnalyzer(QMainWindow):
         # 自选排序
         clan = clan.sort_values(self.clan_sort_key, ascending=self.clan_sort_asc).reset_index(drop=True)
 
-        table_widget = self.create_copyable_table(
-            clan,
-            columns=['排名', '公会id', '公会名称', '人数', '公会平均战力', '平均骑士等级', '深域平均层数'],
-            col_keys=['排名', '公会id', '公会名称', '人数', '公会平均战力', '平均骑士等级', '深域平均层数']
-        )
+        clan_cols = ['排名', '公会id', '公会名称', '人数', '公会平均战力', '平均骑士等级', '深域平均层数']
+        if not has_rank:
+            clan_cols.remove('平均骑士等级')
+        table_widget = self.create_copyable_table(clan, columns=clan_cols, col_keys=clan_cols)
         tbl = table_widget.table
         # 公会id/公会名称列双击查看玩家列表，其余列双击复制
         tbl.cellDoubleClicked.connect(
@@ -739,13 +756,17 @@ class DataAnalyzer(QMainWindow):
         except ValueError:
             return
         clan_name = name_item.text() if name_item else ''
-        filtered = self.df[self.df['join_clan_id'] == clan_id][
-            ['viewer_id', 'user_name', 'total_power', 'princess_knight_rank']]
+        # 古早 CSV 缺少 princess_knight_rank 列时去掉骑士等级列
+        cols = ['viewer_id', 'user_name', 'total_power']
+        headers = ['玩家id', '玩家昵称', '战力']
+        if 'princess_knight_rank' in self.df.columns:
+            cols.append('princess_knight_rank')
+            headers.append('骑士等级')
+        filtered = self.df[self.df['join_clan_id'] == clan_id][cols]
         filtered = filtered.sort_values('viewer_id', ascending=True).reset_index(drop=True)
         self._show_player_list(
             filtered, f"公会 {clan_name}（id: {clan_id}）— 玩家列表（共 {len(filtered)} 人）",
-            headers=['玩家id', '玩家昵称', '战力', '骑士等级'],
-            col_keys=['viewer_id', 'user_name', 'total_power', 'princess_knight_rank'])
+            headers=headers, col_keys=cols)
 
     # ---------- 竞技场分布 ----------
     def build_arena_table(self, df=None):
@@ -915,7 +936,9 @@ class DataAnalyzer(QMainWindow):
         power = pd.to_numeric(df['total_power'], errors='coerce')
         my_power = pd.to_numeric(pd.Series([player['total_power']]), errors='coerce').iloc[0]
         power_rank = int((power > my_power).sum()) + 1 if pd.notna(my_power) else None
-        rank_rank = int((df['princess_knight_rank'] > player['princess_knight_rank']).sum()) + 1
+        # 古早 CSV 缺少 princess_knight_rank 列时不计算全服排名
+        has_rank = 'princess_knight_rank' in df.columns
+        rank_rank = int((df['princess_knight_rank'] > player['princess_knight_rank']).sum()) + 1 if has_rank else None
         unit_rank = int((df['unit_num'] > player['unit_num']).sum()) + 1
 
         rows = [
@@ -924,7 +947,7 @@ class DataAnalyzer(QMainWindow):
             ('队伍等级', val('team_level')),
             ('战力', f"{player['total_power']}（全服第 {power_rank} 名）" if power_rank else player['total_power']),
             ('图鉴数', f"{player['unit_num']}（全服第 {unit_rank} 名）"),
-            ('骑士等级', f"{player['princess_knight_rank']}（全服第 {rank_rank} 名）"),
+            ('骑士等级', f"{player['princess_knight_rank']}（全服第 {rank_rank} 名）" if has_rank else '-'),
             ('公会', f"{player['join_clan_name']}（id: {player['join_clan_id']}）"),
             ('竞技场排名', fmt_arena('arena_group', 'arena_rank')),
             ('公主竞技场排名', fmt_arena('grand_arena_group', 'grand_arena_rank')),
